@@ -1,0 +1,38 @@
+# Exemplo de configuração do mtsh (servidores fictícios).
+# Teste com:  go run . --config ./hosts.example.yaml
+folders:
+  - Casa
+  - Trabalho/Produção
+  - Trabalho/Testes
+folder_styles:
+  Casa:
+    icon: "🏠"
+    color: green
+  Trabalho/Produção:
+    icon: "🚀"
+    color: red
+hosts:
+  - name: nas
+    folder: Casa
+    host: 192.168.1.20
+    user: admin
+    tags: [backup]
+  - name: raspberry
+    folder: Casa
+    host: 192.168.1.30
+    user: pi
+  - name: web-01
+    folder: Trabalho/Produção
+    host: web-01.example.com
+    user: deploy
+    tags: [web]
+  - name: db-01
+    folder: Trabalho/Produção
+    host: db-01.example.com
+    user: deploy
+    port: 2222
+    tags: [banco]
+  - name: staging
+    folder: Trabalho/Testes
+    host: staging.example.com
+    user: deploy

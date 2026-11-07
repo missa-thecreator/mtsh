@@ -1,0 +1,45 @@
+# Testes em todo push e pull request; em tag vX.Y.Z, compila os pacotes e
+# publica a release com eles (o install.sh baixa dela).
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.4"
+      - run: go vet ./...
+      - run: go test ./...
+
+  release:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.4"
+      - run: ./scripts/build.sh "$GITHUB_REF_NAME"
+      - name: publicar release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files="dist/*.tar.gz dist/checksums.txt"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            # release já existe (tag recriada): troca os arquivos e publica
+            gh release upload "$GITHUB_REF_NAME" $files --clobber
+            gh release edit "$GITHUB_REF_NAME" --draft=false --title "mtsh $GITHUB_REF_NAME"
+          else
+            gh release create "$GITHUB_REF_NAME" $files --title "mtsh $GITHUB_REF_NAME" --generate-notes
+          fi
