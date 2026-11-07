@@ -63,6 +63,15 @@ func distroOf(h config.Host) (distro, bool) {
 	return distros["linux"], true
 }
 
+// searchIcon é a lupa da busca: a da Nerd Font quando os logos estão ligados
+// (mesma fonte), senão "/" — que existe em qualquer fonte.
+func (m *Model) searchIcon() string {
+	if m.cfg.SimpleIcons {
+		return "/"
+	}
+	return "\uf002"
+}
+
 // iconServer é o ícone (Nerd Font) de servidor ainda não detectado.
 const iconServer = "\uf233"
 

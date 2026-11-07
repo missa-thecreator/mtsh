@@ -2,6 +2,8 @@
 
 Gerenciador de conexões SSH no terminal, com cara de aplicativo.
 
+![mtsh: pastas, cards com o logo da distro, sessão em aba, cadastro e busca](docs/preview.gif)
+
 Seus servidores ficam organizados em pastas, aparecem como cards com o logo da distro, e cada conexão abre numa aba dentro do próprio mtsh. Tudo no terminal, com teclado ou mouse.
 
 > A interface do mtsh é em português.

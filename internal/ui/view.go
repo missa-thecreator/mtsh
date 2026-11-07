@@ -64,11 +64,11 @@ func (m Model) viewSide() string {
 	var search string
 	switch {
 	case m.searching:
-		search = sFg.Render(" ⌕ "+m.query) + sAcc.Render("▏")
+		search = sFg.Render(" "+m.searchIcon()+" "+m.query) + sAcc.Render("▏")
 	case m.query != "":
-		search = sAcc.Render(" ⌕ " + m.query)
+		search = sAcc.Render(" " + m.searchIcon() + " " + m.query)
 	default:
-		search = sFaint.Render(" ⌕ buscar            /")
+		search = sFaint.Render(" " + m.searchIcon() + " buscar            /")
 	}
 	b.WriteString(zone.Mark("act:search", search) + "\n\n")
 
