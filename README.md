@@ -8,6 +8,27 @@ Seus servidores ficam organizados em pastas, aparecem como cards com o logo da d
 
 > A interface do mtsh é em português.
 
+## Comandos rápidos
+
+```sh
+# instalar
+curl -fsSL https://raw.githubusercontent.com/missa-thecreator/mtsh/main/install.sh | sh
+
+# abrir
+mtsh
+
+# atualizar
+mtsh --atualizar
+
+# instalar os ícones das distros (se pulou na instalação)
+mtsh --instalar-icones
+
+# ver a versão
+mtsh --version
+```
+
+Pra desinstalar, veja [Desinstalar](#desinstalar).
+
 ## Recursos
 
 - **Pastas** com ícone e cor, aninhadas como você quiser.
@@ -85,6 +106,31 @@ Tudo fica em `~/.config/mtsh/`:
 - `passwords.json`: senhas salvas (permissão 600, legível só pelo seu usuário, como as chaves em `~/.ssh`).
 
 Não coloque `keys/` nem `passwords.json` em backup público ou em repositório de dotfiles.
+
+## Desinstalar
+
+Remova o programa e o cache:
+
+```sh
+rm ~/.local/bin/mtsh
+rm -rf ~/.cache/mtsh
+```
+
+Se quiser apagar também os seus servidores, as chaves coladas e as senhas salvas:
+
+```sh
+rm -rf ~/.config/mtsh
+```
+
+### Desfazer os ícones das distros (WSL)
+
+Se você instalou os ícones no WSL, o mtsh mexeu em três lugares do Windows. Antes de editar cada configuração, ele guardou uma cópia ao lado do original:
+
+1. **Windows Terminal:** volte a fonte pra Cascadia Mono em Configurações → seu perfil → Aparência → Tipo de fonte. Ou restaure a cópia `settings.json.bak-mtsh`, que fica na mesma pasta do `settings.json` do Windows Terminal.
+2. **VS Code:** apague a linha `terminal.integrated.fontFamily` do seu `settings.json`, ou restaure o `settings.json.bak-mtsh` da mesma pasta.
+3. **Fontes:** em Configurações do Windows → Personalização → Fontes, procure **Cascadia Mono NF** e **Symbols Nerd Font Mono** e clique em Desinstalar.
+
+No Linux e no macOS, só a fonte de símbolos foi instalada. Apague `SymbolsNerdFontMono-Regular.ttf` de `~/.local/share/fonts` (Linux) ou `~/Library/Fonts` (macOS).
 
 ## Compilar do código
 
