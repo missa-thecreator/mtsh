@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"mtsh/internal/config"
 	"mtsh/internal/fonts"
 	"mtsh/internal/ui"
+	"mtsh/internal/update"
 	"mtsh/internal/vault"
 )
 
@@ -39,10 +41,18 @@ func main() {
 	cfgPath := flag.String("config", config.DefaultPath(), "arquivo de servidores (yaml)")
 	installIcons := flag.Bool("instalar-icones", false, "instala a fonte com os logos das distros e configura o terminal")
 	showVersion := flag.Bool("version", false, "mostra a versão")
+	doUpdate := flag.Bool("atualizar", false, "baixa e instala a última versão")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Println("mtsh", version)
+		return
+	}
+
+	if *doUpdate {
+		if _, err := update.Apply(context.Background(), version, os.Stdout); err != nil {
+			fail(err)
+		}
 		return
 	}
 
@@ -62,7 +72,7 @@ func main() {
 		fail(err)
 	}
 
-	p := tea.NewProgram(ui.New(*cfgPath, cfg, v), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(ui.New(*cfgPath, cfg, v, version), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fail(err)
 	}

@@ -86,18 +86,22 @@ type Model struct {
 	tab      int                // 0 = Início, i = sessions[i-1]
 
 	iconStatus *fonts.Status // nil enquanto verifica
+
+	version   string // versão em execução (ex: v0.2.1; "dev" no go run)
+	newerTag  string // versão mais nova disponível ("" = nenhuma)
+	updatedTo string // versão já instalada nesta sessão (vale ao reabrir)
 }
 
-func New(cfgPath string, cfg *config.File, v *vault.Vault) Model {
+func New(cfgPath string, cfg *config.File, v *vault.Vault, version string) Model {
 	zone.NewGlobal()
-	m := Model{cfgPath: cfgPath, cfg: cfg, vault: v, open: map[string]bool{}, focus: focusGrid}
+	m := Model{cfgPath: cfgPath, cfg: cfg, vault: v, version: version, open: map[string]bool{}, focus: focusGrid}
 	for _, f := range cfg.Folders {
 		m.open[f] = true
 	}
 	return m
 }
 
-func (m Model) Init() tea.Cmd { return checkIcons }
+func (m Model) Init() tea.Cmd { return tea.Batch(checkIcons, checkUpdate(m.version)) }
 
 // cards devolve os hosts mostrados na área principal.
 func (m *Model) cards() []config.Host {
@@ -360,6 +364,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case iconInstallMsg:
 		cmd = m.onIconInstall(msg)
+
+	case updateAvailableMsg:
+		m.onUpdateAvailable(msg.tag)
+
+	case updateAppliedMsg:
+		m.onUpdateApplied(msg)
 
 	case sshDoneMsg:
 		var ee *exec.ExitError

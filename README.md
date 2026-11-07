@@ -46,6 +46,18 @@ Quem desenha os logos é a fonte do terminal, e o mtsh já traz as fontes necess
 
 Se preferir não instalar fonte, escolha **Bolinha na cor da distro** nos Ajustes.
 
+## Atualizar
+
+O mtsh avisa no rodapé quando sai uma versão nova. Ele consulta o GitHub em segundo plano, no máximo uma vez por dia. Pra atualizar:
+
+```sh
+mtsh --atualizar
+```
+
+Ou pelos **Ajustes** (tecla `,`) → **Atualizar**. O mtsh baixa o pacote do seu sistema, confere o checksum e troca o binário. Servidores, pastas, chaves e senhas não são tocados. Depois é só fechar e abrir o mtsh.
+
+Pra desligar o aviso: `export MTSH_NO_UPDATE_CHECK=1`.
+
 ## Usar
 
 ```sh
