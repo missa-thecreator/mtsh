@@ -234,6 +234,9 @@ func (s *settingsModal) view(m *Model) string {
 				rows = append(rows, sAcc.Render("  ! ")+sFg.Render(t.Name+": ")+sDim.Render(t.Note))
 			}
 		}
+		if st.Hint != "" {
+			rows = append(rows, wrapDim(st.Hint))
+		}
 	}
 
 	// linha de teste: se a fonte estiver funcionando, aparecem os logos

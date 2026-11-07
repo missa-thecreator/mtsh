@@ -51,8 +51,7 @@ func Install(out io.Writer) error {
 		home, _ := os.UserHomeDir()
 		return installUnix(out, filepath.Join(home, "Library", "Fonts"))
 	default:
-		home, _ := os.UserHomeDir()
-		return installUnix(out, filepath.Join(home, ".local", "share", "fonts"))
+		return installUnix(out, linuxFontsDir())
 	}
 }
 
@@ -164,17 +163,126 @@ func wslpath(flag, p string) (string, error) {
 
 // ---- Linux / macOS ----
 
+// fontconfigRule faz a Symbols Nerd Font Mono servir de reserva pra qualquer
+// fonte: o terminal acha os logos nela sem precisar de configuração.
+const fontconfigRule = `<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<!-- Criado pelo mtsh: usa a Symbols Nerd Font Mono como reserva pros logos
+     das distros, em qualquer fonte. Pra desfazer, apague este arquivo. -->
+<fontconfig>
+  <match target="pattern">
+    <edit name="family" mode="append">
+      <string>Symbols Nerd Font Mono</string>
+    </edit>
+  </match>
+</fontconfig>
+`
+
+const fontconfigFile = "99-mtsh-symbols.conf"
+
+func xdgDir(env, fallback string) string {
+	if d := os.Getenv(env); d != "" {
+		return d
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, fallback)
+}
+
+func linuxFontsDir() string { return filepath.Join(xdgDir("XDG_DATA_HOME", ".local/share"), "fonts") }
+
+// FontconfigPath é a regra que o mtsh cria (pra desinstalar, é só apagar).
+func FontconfigPath() string {
+	return filepath.Join(xdgDir("XDG_CONFIG_HOME", ".config"), "fontconfig", "conf.d", fontconfigFile)
+}
+
+// logoFonts pergunta ao fontconfig quais fontes têm o logo do Ubuntu (U+F31B).
+// ok=false quando não dá pra perguntar (sem fc-list).
+func logoFonts() (families []string, ok bool) {
+	out, err := exec.Command("fc-list", ":charset=f31b", "family").Output()
+	if err != nil {
+		return nil, false
+	}
+	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			families = append(families, l)
+		}
+	}
+	return families, true
+}
+
 func installUnix(out io.Writer, dir string) error {
+	if runtime.GOOS == "darwin" {
+		dest, err := writeFont(dir, fontFile, symbolsFont)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "✓ fonte instalada em %s\n\n", dest)
+		fmt.Fprintf(out, "Se o seu terminal não usar a fonte sozinho, coloque \"%s\" como fonte de reserva.\n", fontFamily)
+		return nil
+	}
+
+	// já tem alguma Nerd Font com os logos? então não precisa instalar nada
+	if fams, ok := logoFonts(); ok && len(fams) > 0 && !anyContains(fams, fontFamily) {
+		fmt.Fprintf(out, "✓ você já tem uma fonte com os logos (%s); nada a instalar\n", fams[0])
+		terminalTips(out)
+		return nil
+	}
+
 	dest, err := writeFont(dir, fontFile, symbolsFont)
 	if err != nil {
 		return err
 	}
+	fmt.Fprintf(out, "✓ fonte instalada em %s\n", dest)
+
+	conf := FontconfigPath()
+	if err := os.MkdirAll(filepath.Dir(conf), 0o755); err != nil {
+		return err
+	}
+	if cur, err := os.ReadFile(conf); err != nil || string(cur) != fontconfigRule {
+		if err := os.WriteFile(conf, []byte(fontconfigRule), 0o644); err != nil {
+			return fmt.Errorf("não deu pra criar a regra do fontconfig: %w", err)
+		}
+	}
+	fmt.Fprintf(out, "✓ fonte de reserva configurada (%s)\n", conf)
+
 	if _, err := exec.LookPath("fc-cache"); err == nil {
 		exec.Command("fc-cache", "-f", dir).Run()
 	}
-	fmt.Fprintf(out, "✓ fonte instalada em %s\n\n", dest)
-	fmt.Fprintf(out, "Se o seu terminal não usar a fonte sozinho, coloque \"%s\" como fonte de reserva.\n", fontFamily)
+	if fams, ok := logoFonts(); ok && len(fams) == 0 {
+		fmt.Fprintln(out, "! o fontconfig ainda não enxerga a fonte; tente fechar e abrir a sessão")
+	}
+	terminalTips(out)
 	return nil
+}
+
+func anyContains(list []string, sub string) bool {
+	for _, s := range list {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// InSSH diz se o mtsh está rodando num servidor acessado por SSH.
+func InSSH() bool { return os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_TTY") != "" }
+
+// terminalTips dá a dica certa pro terminal em uso.
+func terminalTips(out io.Writer) {
+	fmt.Fprintln(out)
+	switch {
+	case InSSH():
+		fmt.Fprintln(out, "! Você está numa sessão SSH. Quem desenha os logos é o terminal do seu")
+		fmt.Fprintln(out, "  computador, então a fonte precisa estar nele: rode mtsh --instalar-icones")
+		fmt.Fprintln(out, "  lá, ou escolha \"Bolinha na cor da distro\" nos Ajustes.")
+	case os.Getenv("WEZTERM_EXECUTABLE") != "" || os.Getenv("TERM_PROGRAM") == "WezTerm":
+		fmt.Fprintln(out, "O WezTerm já traz os ícones; os logos devem aparecer direto.")
+	case os.Getenv("KITTY_WINDOW_ID") != "":
+		fmt.Fprintln(out, "kitty: feche e abra o terminal. Se algum logo não aparecer, adicione no kitty.conf:")
+		fmt.Fprintf(out, "  symbol_map U+E000-U+F8FF %s\n", fontFamily)
+	default:
+		fmt.Fprintln(out, "Feche e abra o terminal pra os logos aparecerem.")
+	}
 }
 
 func writeFont(dir, file string, data []byte) (string, error) {
@@ -327,6 +435,7 @@ type Terminal struct {
 type Status struct {
 	FontInstalled bool
 	Terminals     []Terminal
+	Hint          string // observação pra mostrar nos Ajustes (não impede Ready)
 	Err           error
 }
 
@@ -346,12 +455,7 @@ func (s Status) Ready() bool {
 // Check confere a instalação sem alterar nada.
 func Check() Status {
 	if !isWSL() {
-		home, _ := os.UserHomeDir()
-		dir := filepath.Join(home, ".local", "share", "fonts")
-		if runtime.GOOS == "darwin" {
-			dir = filepath.Join(home, "Library", "Fonts")
-		}
-		return Status{FontInstalled: sameFile(filepath.Join(dir, fontFile), symbolsFont)}
+		return checkUnix()
 	}
 
 	local, err := winFolder("LocalApplicationData")
@@ -411,4 +515,26 @@ func readJSON(path string) (string, error) {
 		return "", err
 	}
 	return strings.TrimPrefix(string(raw), "\uFEFF"), nil
+}
+
+// checkUnix: Linux (pergunta ao fontconfig) e macOS (confere o arquivo).
+func checkUnix() Status {
+	st := Status{}
+	if InSSH() {
+		st.Hint = "Sessão SSH: os logos dependem da fonte do computador onde está o seu terminal."
+	}
+	if runtime.GOOS == "darwin" {
+		home, _ := os.UserHomeDir()
+		st.FontInstalled = sameFile(filepath.Join(home, "Library", "Fonts", fontFile), symbolsFont)
+		return st
+	}
+	if fams, ok := logoFonts(); ok {
+		st.FontInstalled = len(fams) > 0
+		if st.FontInstalled && !anyContains(fams, fontFamily) {
+			st.Hint = "Usando a fonte " + fams[0] + ", que já tem os logos."
+		}
+		return st
+	}
+	st.FontInstalled = sameFile(filepath.Join(linuxFontsDir(), fontFile), symbolsFont)
+	return st
 }

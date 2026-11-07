@@ -50,7 +50,7 @@ O instalador:
 - instala em `~/.local/bin`;
 - pergunta se você quer instalar os ícones das distros.
 
-Funciona no **Linux** e no **macOS** (Intel e ARM). No **Windows**, use dentro do **WSL**.
+Feito pra **Linux** (x86_64 e ARM). Também roda no **WSL**, no Windows. Os pacotes pra macOS existem, mas ainda não foram testados.
 
 Prefere instalar na mão? Baixe o pacote do seu sistema em [Releases](https://github.com/missa-thecreator/mtsh/releases) e rode:
 
@@ -60,10 +60,11 @@ Prefere instalar na mão? Baixe o pacote do seu sistema em [Releases](https://gi
 
 ### Ícones das distros
 
-Quem desenha os logos é a fonte do terminal, e o mtsh já traz as fontes necessárias dentro dele. Pra instalar, abra os **Ajustes** (tecla `,`) ou rode `mtsh --instalar-icones`.
+Quem desenha os logos é a fonte do terminal, e o mtsh já traz a fonte necessária dentro dele. Pra instalar, abra os **Ajustes** (tecla `,`) ou rode `mtsh --instalar-icones`.
 
+- **Linux:** se você já usa uma Nerd Font, o mtsh percebe e não instala nada. Senão, ele instala a `Symbols Nerd Font Mono` no seu usuário e cria uma regra no fontconfig pra ela servir de reserva. Assim os logos aparecem no GNOME Terminal, Konsole, Alacritty, kitty, foot e outros, sem configurar nada no terminal. O WezTerm já vem com os ícones.
+- **Num servidor via SSH:** quem desenha os logos é o terminal do **seu computador**, então a fonte precisa estar nele. Rode `mtsh --instalar-icones` na sua máquina.
 - **WSL:** instala as fontes no Windows e configura o Windows Terminal e o terminal do VS Code. Antes de editar cada configuração, guarda uma cópia como `settings.json.bak-mtsh`.
-- **Linux e macOS:** instala a fonte de símbolos no seu usuário. Se o terminal não usar ela sozinho, coloque `Symbols Nerd Font Mono` como fonte de reserva.
 
 Se preferir não instalar fonte, escolha **Bolinha na cor da distro** nos Ajustes.
 
@@ -122,6 +123,14 @@ Se quiser apagar também os seus servidores, as chaves coladas e as senhas salva
 rm -rf ~/.config/mtsh
 ```
 
+### Desfazer os ícones das distros (Linux)
+
+```sh
+rm ~/.local/share/fonts/SymbolsNerdFontMono-Regular.ttf
+rm ~/.config/fontconfig/conf.d/99-mtsh-symbols.conf
+fc-cache -f
+```
+
 ### Desfazer os ícones das distros (WSL)
 
 Se você instalou os ícones no WSL, o mtsh mexeu em três lugares do Windows. Antes de editar cada configuração, ele guardou uma cópia ao lado do original:
@@ -129,8 +138,6 @@ Se você instalou os ícones no WSL, o mtsh mexeu em três lugares do Windows. A
 1. **Windows Terminal:** volte a fonte pra Cascadia Mono em Configurações → seu perfil → Aparência → Tipo de fonte. Ou restaure a cópia `settings.json.bak-mtsh`, que fica na mesma pasta do `settings.json` do Windows Terminal.
 2. **VS Code:** apague a linha `terminal.integrated.fontFamily` do seu `settings.json`, ou restaure o `settings.json.bak-mtsh` da mesma pasta.
 3. **Fontes:** em Configurações do Windows → Personalização → Fontes, procure **Cascadia Mono NF** e **Symbols Nerd Font Mono** e clique em Desinstalar.
-
-No Linux e no macOS, só a fonte de símbolos foi instalada. Apague `SymbolsNerdFontMono-Regular.ttf` de `~/.local/share/fonts` (Linux) ou `~/Library/Fonts` (macOS).
 
 ## Compilar do código
 

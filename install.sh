@@ -11,6 +11,7 @@
 #   MTSH_VERSION=v0.2.0        versão específica (padrão: a mais recente)
 #   MTSH_INSTALL_DIR=...       onde instalar (padrão: ~/.local/bin)
 #   MTSH_ICONS=sim|nao         instalar os ícones sem perguntar
+#   MTSH_PATH=sim|nao          colocar a pasta no PATH sem perguntar
 #   MTSH_REPO=dono/repo        repositório de onde baixar (padrão: missa-thecreator/mtsh)
 set -eu
 
@@ -19,6 +20,21 @@ API="${MTSH_GITHUB_API:-https://api.github.com}"
 INSTALL_DIR="${MTSH_INSTALL_DIR:-$HOME/.local/bin}"
 
 say() { printf '%s\n' "$*"; }
+
+# ask PERGUNTA VALOR_PRONTO: sim/não pelo terminal (funciona mesmo com curl | sh).
+# Sem terminal e sem valor pronto, a resposta é "não".
+ask() {
+	a="$2"
+	if [ -z "$a" ]; then
+		if [ -r /dev/tty ]; then
+			printf '\n%s [S/n] ' "$1"
+			read -r a </dev/tty || a=n
+		else
+			a=n
+		fi
+	fi
+	case "$a" in "" | s | S | sim | y | yes) return 0 ;; *) return 1 ;; esac
+}
 die() { printf 'mtsh: %s\n' "$*" >&2; exit 1; }
 
 # ---- sistema ----
@@ -81,34 +97,45 @@ mkdir -p "$INSTALL_DIR"
 install -m 0755 "$bin" "$INSTALL_DIR/mtsh"
 say "✓ $("$INSTALL_DIR/mtsh" --version) instalado em $INSTALL_DIR/mtsh"
 
+# ---- PATH ----
 case ":$PATH:" in
 	*":$INSTALL_DIR:"*) ;;
 	*)
+		case "${SHELL:-}" in
+			*/zsh) rc="$HOME/.zshrc" ;;
+			*/bash) rc="$HOME/.bashrc" ;;
+			*) rc="$HOME/.profile" ;;
+		esac
+		# grava $HOME literal quando dá, pra a linha valer em qualquer máquina
+		dir_expr="$INSTALL_DIR"
+		case "$INSTALL_DIR" in "$HOME"/*) dir_expr="\$HOME${INSTALL_DIR#"$HOME"}" ;; esac
+		line="case \":\$PATH:\" in *\":$dir_expr:\"*) ;; *) export PATH=\"$dir_expr:\$PATH\" ;; esac"
+
 		say ""
-		say "! $INSTALL_DIR não está no seu PATH. Adicione no ~/.bashrc ou ~/.zshrc:"
-		say "    export PATH=\"$INSTALL_DIR:\$PATH\""
+		say "! $INSTALL_DIR ainda não está no seu PATH."
+		if [ -f "$rc" ] && grep -qF "# mtsh: PATH" "$rc"; then
+			say "  Já está configurado no $rc; vale nos próximos terminais."
+		elif ask "Adicionar ao PATH no $rc?" "${MTSH_PATH:-}"; then
+			printf '\n# mtsh: PATH\n%s\n' "$line" >>"$rc"
+			say "✓ adicionado ao $rc; vale nos próximos terminais"
+		else
+			say "  Pra adicionar depois, coloque no $rc:"
+			say "    export PATH=\"$dir_expr:\$PATH\""
+		fi
+		say "  Pra usar já neste terminal:  export PATH=\"$INSTALL_DIR:\$PATH\""
 		;;
 esac
 
 # ---- ícones das distros ----
-answer="${MTSH_ICONS:-}"
-if [ -z "$answer" ]; then
-	if [ -r /dev/tty ]; then
-		printf '\nInstalar os ícones das distros (fonte com os logos)? [S/n] '
-		read -r answer </dev/tty || answer=n
-	else
-		answer=n
-	fi
+if ask "Instalar os ícones das distros (fonte com os logos)?" "${MTSH_ICONS:-}"; then
+	say ""
+	"$INSTALL_DIR/mtsh" --instalar-icones || say "! não deu pra instalar os ícones agora; dá pra fazer depois nos Ajustes (tecla ,)"
+else
+	say "  (dá pra instalar depois nos Ajustes do mtsh, tecla ,)"
 fi
-case "$answer" in
-	"" | s | S | sim | y | yes)
-		say ""
-		"$INSTALL_DIR/mtsh" --instalar-icones || say "! não deu pra instalar os ícones agora; dá pra fazer depois nos Ajustes (tecla ,)"
-		;;
-	*)
-		say "  (dá pra instalar depois nos Ajustes do mtsh, tecla ,)"
-		;;
-esac
 
 say ""
-say "Pronto! Rode: mtsh"
+case ":$PATH:" in
+	*":$INSTALL_DIR:"*) say "Pronto! Rode: mtsh" ;;
+	*) say "Pronto! Abra um novo terminal e rode: mtsh  (ou, agora mesmo: $INSTALL_DIR/mtsh)" ;;
+esac
