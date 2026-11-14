@@ -9,7 +9,6 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.4
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/creack/pty v1.1.24
-	github.com/hinshun/vt10x v0.0.0-20220301184237-5011da428d02
 	github.com/lrstanley/bubblezone v1.0.0
 	github.com/mattn/go-runewidth v0.0.16
 	github.com/tidwall/gjson v1.17.3

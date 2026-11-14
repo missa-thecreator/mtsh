@@ -14,7 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/creack/pty"
-	"github.com/hinshun/vt10x"
+	"mtsh/internal/vt10x"
 )
 
 type Session struct {
@@ -29,6 +29,7 @@ type Session struct {
 	mu      sync.Mutex
 	exited  bool
 	exitErr error
+	offset  int // quantas linhas acima do fim a pessoa rolou (0 = no fim)
 }
 
 // Start roda cmd num PTY do tamanho dado.
@@ -58,7 +59,16 @@ func (s *Session) readLoop() {
 		if n > 0 {
 			data := append(pending, buf[:n]...)
 			cut := incompleteTail(data)
+			before := s.pushed()
 			s.term.Write(data[:cut])
+			// rolado pra cima? mantém parado o trecho que a pessoa está lendo
+			if added := s.pushed() - before; added > 0 {
+				s.mu.Lock()
+				if s.offset > 0 {
+					s.offset += added
+				}
+				s.mu.Unlock()
+			}
 			pending = append([]byte(nil), data[cut:]...)
 			select {
 			case s.updates <- struct{}{}:
@@ -162,25 +172,85 @@ type style struct {
 	bold, italic, underline, reverse bool
 }
 
-// Lines devolve a tela atual, uma string por linha, com cores ANSI.
+func (s *Session) pushed() int {
+	s.term.Lock()
+	defer s.term.Unlock()
+	return s.term.HistoryPushed()
+}
+
+// ---- rolagem ----
+
+// AltScreen diz se o programa remoto está na tela alternativa (vim, htop,
+// less…). Nela não há histórico: a rodinha vira setas pro programa.
+func (s *Session) AltScreen() bool { return s.term.Mode()&vt10x.ModeAltScreen != 0 }
+
+// ScrollBy rola o histórico: n > 0 sobe, n < 0 desce.
+func (s *Session) ScrollBy(n int) {
+	s.term.Lock()
+	hl := s.term.HistoryLen()
+	s.term.Unlock()
+	s.mu.Lock()
+	s.offset = max(0, min(s.offset+n, hl))
+	s.mu.Unlock()
+}
+
+// ScrollToBottom volta pro fim (a tela atual).
+func (s *Session) ScrollToBottom() {
+	s.mu.Lock()
+	s.offset = 0
+	s.mu.Unlock()
+}
+
+// Scroll diz quanto está rolado e o tamanho do histórico.
+func (s *Session) Scroll() (offset, history int) {
+	s.term.Lock()
+	hl := s.term.HistoryLen()
+	s.term.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return min(s.offset, hl), hl
+}
+
+// Lines devolve o que aparece na aba, uma string por linha, com cores ANSI:
+// a tela atual ou, se a pessoa rolou pra cima, um trecho do histórico.
 func (s *Session) Lines(showCursor bool) []string {
+	s.mu.Lock()
+	off := s.offset
+	s.mu.Unlock()
+
 	s.term.Lock()
 	defer s.term.Unlock()
 	cols, rows := s.term.Size()
+	hl := s.term.HistoryLen()
+	off = min(off, hl)
 	cur := s.term.Cursor()
-	cursorOn := showCursor && s.term.CursorVisible()
+	cursorOn := showCursor && off == 0 && s.term.CursorVisible()
+	blank := vt10x.Glyph{FG: vt10x.DefaultFG, BG: vt10x.DefaultBG}
 
 	out := make([]string, rows)
 	var b strings.Builder
 	for y := 0; y < rows; y++ {
+		// histórico e tela formam uma lista só; a janela começa "off" linhas acima do fim
+		idx := hl - off + y
+		var hist []vt10x.Glyph
+		sy := idx - hl
+		if idx < hl {
+			hist = s.term.HistoryLine(idx)
+		}
 		b.Reset()
 		prev := style{fg: vt10x.DefaultFG, bg: vt10x.DefaultBG}
 		for x := 0; x < cols; x++ {
-			g := s.term.Cell(x, y)
+			g := blank
+			switch {
+			case idx < hl && x < len(hist):
+				g = hist[x]
+			case idx >= hl:
+				g = s.term.Cell(x, sy)
+			}
 			st := style{fg: g.FG, bg: g.BG,
 				bold: g.Mode&attrBold != 0, italic: g.Mode&attrItalic != 0,
 				underline: g.Mode&attrUnderline != 0, reverse: g.Mode&attrReverse != 0}
-			if cursorOn && x == cur.X && y == cur.Y {
+			if cursorOn && x == cur.X && sy == cur.Y {
 				st.reverse = !st.reverse
 			}
 			if st != prev {

@@ -29,6 +29,7 @@ for target in $TARGETS; do
 
 	cp README.md LICENSE "$work/"
 	cp internal/fonts/LICENSE-cascadia internal/fonts/LICENSE-nerd-fonts "$work/"
+	cp internal/vt10x/LICENSE "$work/LICENSE-vt10x"
 	tar -C dist -czf "dist/$name.tar.gz" "$name"
 	rm -rf "$work"
 done

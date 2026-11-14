@@ -416,6 +416,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// piscar do cursor e outras mensagens dos campos de texto
 		if m.modal != nil {
 			cmd = m.updateModal(msg)
+		} else if s := m.current(); s != nil {
+			// teclas que o Bubble Tea não conhece, como shift+PgUp/PgDn
+			if seq, ok := unknownCSI(msg); ok {
+				m.sessionCSI(s, seq)
+			}
 		}
 	}
 	m.clamp()
@@ -588,7 +593,10 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		if msg.Button == tea.MouseButtonWheelUp {
 			d = -1
 		}
-		if m.current() != nil {
+		if s := m.current(); s != nil {
+			if msg.X >= sideW {
+				m.scrollSession(s, -d*3) // rodinha pra cima (d=-1) sobe 3 linhas
+			}
 			return nil
 		}
 		if msg.X < sideW {

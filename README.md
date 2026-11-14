@@ -94,6 +94,7 @@ mtsh
 | `n` | nova pasta (`e` numa pasta edita nome, ícone e cor) |
 | `/` | buscar |
 | `ctrl+b` | numa aba de sessão, volta pro Início |
+| rodinha, `shift+↑↓`, `shift+PgUp/PgDn` | numa aba de sessão, rola o histórico (digitar volta pro fim) |
 | `1`–`9` | no Início, vai pra aba |
 | `,` | ajustes |
 | `q` | sair |
@@ -163,3 +164,5 @@ Issues e pull requests são bem-vindos. Antes de abrir um PR, rode `go vet ./...
 [MIT](LICENSE). Pode usar, modificar e distribuir à vontade, mantendo o aviso de copyright.
 
 As fontes embutidas mantêm as licenças originais, que vão em cada pacote: Cascadia Mono NF (SIL Open Font License, Microsoft) e Symbols Nerd Font (MIT).
+
+O emulador de terminal das abas é uma cópia do [vt10x](https://github.com/hinshun/vt10x) (MIT, James Gray), em `internal/vt10x`, com o histórico de rolagem acrescentado pelo mtsh.

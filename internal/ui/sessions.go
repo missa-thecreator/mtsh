@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -214,8 +215,76 @@ func (m *Model) sessionKey(k tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	}
+	// rolagem pelo teclado (só fora da tela cheia, onde as teclas são do programa)
+	if !s.AltScreen() {
+		switch k.String() {
+		case "shift+up":
+			s.ScrollBy(1)
+			return nil
+		case "shift+down":
+			s.ScrollBy(-1)
+			return nil
+		}
+	}
+	// qualquer tecla digitada volta pro fim, como num terminal normal
+	s.ScrollToBottom()
 	s.Write(encodeKey(k, s.AppCursor()))
 	return nil
+}
+
+// scrollSession rola a aba: n > 0 sobe. Na tela cheia (vim, less, htop) não há
+// histórico; aí a rodinha vira setas pro programa, como nos terminais normais.
+func (m *Model) scrollSession(s *session.Session, n int) {
+	if s.AltScreen() {
+		if done, _ := s.Exited(); done {
+			return
+		}
+		key := tea.KeyMsg{Type: tea.KeyDown}
+		if n > 0 {
+			key = tea.KeyMsg{Type: tea.KeyUp}
+		}
+		for i := 0; i < abs(n); i++ {
+			s.Write(encodeKey(key, s.AppCursor()))
+		}
+		return
+	}
+	s.ScrollBy(n)
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+
+// sessionCSI trata sequências que o Bubble Tea não reconhece: shift+PgUp/PgDn
+// rolam uma página do histórico.
+func (m *Model) sessionCSI(s *session.Session, seq string) {
+	if s.AltScreen() {
+		s.Write([]byte(seq)) // na tela cheia, a tecla é do programa
+		return
+	}
+	_, rows := m.termSize()
+	switch seq {
+	case "\x1b[5;2~": // shift+PgUp
+		s.ScrollBy(rows - 1)
+	case "\x1b[6;2~": // shift+PgDn
+		s.ScrollBy(-(rows - 1))
+	default:
+		s.ScrollToBottom()
+		s.Write([]byte(seq))
+	}
+}
+
+// unknownCSI pega a sequência de uma tecla que o Bubble Tea v1 não conhece.
+// O tipo dela não é exportado, então a identificação é pelo nome do tipo.
+func unknownCSI(msg tea.Msg) (string, bool) {
+	v := reflect.ValueOf(msg)
+	if !v.IsValid() || v.Type().Name() != "unknownCSISequenceMsg" || v.Kind() != reflect.Slice {
+		return "", false
+	}
+	return string(v.Bytes()), true
 }
 
 // ---- desenho ----
@@ -229,7 +298,10 @@ func (m Model) viewSession() string {
 		lines = append(lines, "")
 	}
 	lines = lines[:rows]
-	if done {
+	if off, hist := s.Scroll(); off > 0 {
+		msg := fmt.Sprintf(" ↑ histórico  ·  %d de %d linhas acima  ·  rodinha ou shift+↓ desce  ·  digitar volta pro fim ", off, hist)
+		lines[rows-1] = lipgloss.NewStyle().Background(cLine).Foreground(cFg).Width(cols).Render(msg)
+	} else if done {
 		msg := " Sessão encerrada  ·  enter reconecta  ·  x fecha a aba  ·  ctrl+b Início "
 		if s.ExitCode() == 255 {
 			msg = " Não conectou  ·  enter tenta de novo  ·  x fecha a aba  ·  ctrl+b Início "
