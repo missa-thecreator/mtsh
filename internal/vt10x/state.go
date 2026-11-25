@@ -50,7 +50,8 @@ const (
 	ModeFocus
 	ModeMouseX10
 	ModeMouseMany
-	ModeMouseMask = ModeMouseButton | ModeMouseMotion | ModeMouseX10 | ModeMouseMany
+	ModeBracketedPaste // acrescentado pelo mtsh: o programa pediu colagem entre \e[200~ e \e[201~
+	ModeMouseMask      = ModeMouseButton | ModeMouseMotion | ModeMouseX10 | ModeMouseMany
 )
 
 // ChangeFlag represents possible state changes of the terminal.
@@ -554,6 +555,8 @@ func (t *State) setMode(priv bool, set bool, args []int) {
 				t.modMode(set, ModeMouseSgr)
 			case 1034:
 				t.modMode(set, Mode8bit)
+			case 2004: // bracketed paste (acrescentado pelo mtsh)
+				t.modMode(set, ModeBracketedPaste)
 			case 1049, // = 1047 and 1048
 				47, 1047:
 				alt := t.mode&ModeAltScreen != 0

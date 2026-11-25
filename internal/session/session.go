@@ -30,6 +30,10 @@ type Session struct {
 	exited  bool
 	exitErr error
 	offset  int // quantas linhas acima do fim a pessoa rolou (0 = no fim)
+
+	// seleção com o mouse (ver selection.go): selA é onde começou, selB a ponta solta
+	selOn      bool
+	selA, selB Point
 }
 
 // Start roda cmd num PTY do tamanho dado.
@@ -165,6 +169,7 @@ const (
 	attrUnderline = 1 << 1
 	attrBold      = 1 << 2
 	attrItalic    = 1 << 4
+	attrWrap      = 1 << 6 // a linha continua na de baixo (quebrada por falta de espaço)
 )
 
 type style struct {
@@ -216,10 +221,12 @@ func (s *Session) Scroll() (offset, history int) {
 func (s *Session) Lines(showCursor bool) []string {
 	s.mu.Lock()
 	off := s.offset
+	selFrom, selTo, selOK := s.selRange()
 	s.mu.Unlock()
 
 	s.term.Lock()
 	defer s.term.Unlock()
+	base := s.base()
 	cols, rows := s.term.Size()
 	hl := s.term.HistoryLen()
 	off = min(off, hl)
@@ -251,6 +258,9 @@ func (s *Session) Lines(showCursor bool) []string {
 				bold: g.Mode&attrBold != 0, italic: g.Mode&attrItalic != 0,
 				underline: g.Mode&attrUnderline != 0, reverse: g.Mode&attrReverse != 0}
 			if cursorOn && x == cur.X && sy == cur.Y {
+				st.reverse = !st.reverse
+			}
+			if selOK && selected(x, base+idx, selFrom, selTo) {
 				st.reverse = !st.reverse
 			}
 			if st != prev {

@@ -226,7 +226,14 @@ func (m *Model) sessionKey(k tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 	}
-	// qualquer tecla digitada volta pro fim, como num terminal normal
+	// colagem pelo terminal (ctrl+v, ctrl+shift+v): chega como um bloco só
+	if k.Paste {
+		s.ClearSelection()
+		s.Paste(string(k.Runes))
+		return nil
+	}
+	// qualquer tecla digitada volta pro fim e desmarca, como num terminal normal
+	s.ClearSelection()
 	s.ScrollToBottom()
 	s.Write(encodeKey(k, s.AppCursor()))
 	return nil
