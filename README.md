@@ -95,6 +95,8 @@ mtsh
 | `/` | buscar |
 | `ctrl+b` | numa aba de sessão, volta pro Início |
 | rodinha, `shift+↑↓`, `shift+PgUp/PgDn` | numa aba de sessão, rola o histórico (digitar volta pro fim) |
+| arrastar com o mouse | numa aba de sessão, seleciona e copia o texto |
+| botão direito (ou do meio), `ctrl+v` | numa aba de sessão, cola |
 | `1`–`9` | no Início, vai pra aba |
 | `,` | ajustes |
 | `q` | sair |

@@ -79,6 +79,8 @@ type Model struct {
 	lastClickID string
 	lastClickAt time.Time
 
+	dragging bool // arrastando o mouse pra selecionar texto numa aba de sessão
+
 	modal modal        // janela aberta (nil = nenhuma)
 	vault *vault.Vault // senhas salvas
 
@@ -371,6 +373,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case updateAppliedMsg:
 		m.onUpdateApplied(msg)
 
+	case copiedMsg:
+		m.onCopied(msg)
+
+	case pastedMsg:
+		m.onPasted(msg)
+
 	case sshDoneMsg:
 		var ee *exec.ExitError
 		switch {
@@ -584,6 +592,11 @@ func parentOf(r treeRow) string {
 }
 
 func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
+	if s := m.current(); s != nil {
+		if cmd, ok := m.sessionMouse(s, msg); ok {
+			return cmd
+		}
+	}
 	switch msg.Button {
 	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
 		if msg.Action != tea.MouseActionPress {
