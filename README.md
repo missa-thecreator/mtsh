@@ -155,11 +155,26 @@ go test ./...                             # testes
 ./scripts/build.sh v0.2.0                 # pacotes em dist/
 ```
 
-Releases são publicadas pelo GitHub Actions: cada tag `vX.Y.Z` enviada compila os pacotes e cria a release.
-
 ## Contribuir
 
-Issues e pull requests são bem-vindos. Antes de abrir um PR, rode `go vet ./...` e `go test ./...`.
+Issues e pull requests são bem-vindos.
+
+- O desenvolvimento acontece na branch **`dev`**: abra o pull request pra ela.
+- Antes de abrir o PR, rode `go vet ./...` e `go test ./...`.
+- Use mensagens de commit no padrão [Conventional Commits](https://www.conventionalcommits.org/pt-br/): `feat: ...` pra recurso novo, `fix: ...` pra correção, `docs: ...`, `chore: ...` etc.
+
+### Como sai uma versão
+
+Quando a `dev` vai pra **`main`**, o GitHub Actions roda os testes, calcula a próxima versão pelos commits e publica a release sozinho:
+
+| Commits desde a última versão | Exemplo |
+|---|---|
+| algum `feat:` | v0.2.4 → **v0.3.0** |
+| só `fix:`, `chore:` e outros | v0.2.4 → **v0.2.5** |
+| `feat!:` ou `BREAKING CHANGE` | v1.2.3 → **v2.0.0** (antes da 1.0, sobe o número do meio) |
+| só documentação (`*.md`, `docs/`) | não lança versão |
+
+Quem usa o mtsh recebe o aviso de versão nova e atualiza com `mtsh --atualizar`.
 
 ## Licença
 

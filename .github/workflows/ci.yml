@@ -1,12 +1,14 @@
-# Testes em todo push e pull request; em tag vX.Y.Z, compila os pacotes e
-# publica a release com eles (o install.sh baixa dela).
+# Testes em todo push (main e dev) e pull request.
+# Em push na main, calcula a próxima versão pelos commits (scripts/next-version.sh),
+# cria a tag e publica a release com os pacotes (o install.sh baixa dela).
+# Se só mudou documentação, não lança versão.
 name: ci
 
 on:
   push:
-    branches: [main]
-    tags: ["v*"]
+    branches: [main, dev]
   pull_request:
+  workflow_dispatch: # rodar na mão, pela aba Actions
 
 jobs:
   test:
@@ -21,25 +23,47 @@ jobs:
 
   release:
     needs: test
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    concurrency:
+      group: release # duas releases nunca rodam ao mesmo tempo
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # precisa do histórico e das tags pra calcular a versão
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23.4"
-      - run: ./scripts/build.sh "$GITHUB_REF_NAME"
+
+      - name: calcular a próxima versão
+        id: version
+        run: |
+          v="$(./scripts/next-version.sh)"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if [ -n "$v" ]; then echo "próxima versão: $v"; else echo "nada pra lançar (sem commits novos ou só documentação)"; fi
+
+      - name: compilar
+        if: steps.version.outputs.version != ''
+        run: ./scripts/build.sh "${{ steps.version.outputs.version }}"
+
+      - name: criar a tag
+        if: steps.version.outputs.version != ''
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "mtsh $VERSION"
+          git push origin "$VERSION"
+
       - name: publicar release
+        if: steps.version.outputs.version != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          files="dist/*.tar.gz dist/checksums.txt"
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            # release já existe (tag recriada): troca os arquivos e publica
-            gh release upload "$GITHUB_REF_NAME" $files --clobber
-            gh release edit "$GITHUB_REF_NAME" --draft=false --title "mtsh $GITHUB_REF_NAME"
-          else
-            gh release create "$GITHUB_REF_NAME" $files --title "mtsh $GITHUB_REF_NAME" --generate-notes
-          fi
+          gh release create "$VERSION" dist/*.tar.gz dist/checksums.txt \
+            --title "mtsh $VERSION" --generate-notes
