@@ -291,36 +291,70 @@ func (m Model) viewCard(h config.Host, w int, sel bool) string {
 
 // ---- barra de status ----
 
-func (m Model) viewStatus() string {
-	left := sDim.Render(fmt.Sprintf(" %d servidores · %d pastas", len(m.cfg.Hosts), len(m.cfg.Folders)))
-	if m.current() != nil {
-		left = sDim.Render(fmt.Sprintf(" aba %d de %d", m.tab, len(m.sessions)))
-	}
-	if m.toast != "" {
-		st := sOk
-		if m.toastErr {
-			st = sErr
+// hint é um atalho do rodapé: a tecla (em destaque) e o que ela faz.
+type hint struct{ key, desc string }
+
+// statusHints são os atalhos de cada situação, do mais importante pro menos:
+// quando falta espaço, os do fim saem primeiro.
+func (m Model) statusHints() []hint {
+	switch {
+	case m.modal != nil:
+		return []hint{{"enter", "confirmar"}, {"esc", "fechar"}, {"tab", "próximo campo"}}
+	case m.current() != nil:
+		if done, _ := m.current().Exited(); done {
+			return []hint{{"enter", "reconectar"}, {"x", "fechar aba"}, {"ctrl+b", "Início"}}
 		}
-		left += "   " + st.Render(m.toast)
+		return []hint{{"ctrl+b", "Início"}, {"arrastar", "copia"}, {"botão direito", "cola"}, {"rodinha", "rola"}}
+	case m.searching:
+		return []hint{{"enter", "ok"}, {"esc", "limpar"}, {"#tag", "busca por tag"}}
+	case m.query != "":
+		return []hint{{"esc", "limpar filtro"}, {"enter", "conectar"}, {"e", "editar"}, {"/", "buscar"}}
+	case m.focus == focusSide:
+		return []hint{{"enter", "abrir"}, {"a", "servidor"}, {"n", "pasta"}, {"/", "buscar"}, {"q", "sair"},
+			{"e", "editar pasta"}, {"d", "apagar"}, {"tab", "cards"}}
+	}
+	return []hint{{"enter", "conectar"}, {"a", "novo"}, {"/", "buscar"}, {"q", "sair"}, {"e", "editar"},
+		{"n", "pasta"}, {"t", "tela cheia"}, {"d", "apagar"}, {",", "ajustes"}, {"tab", "pastas"}}
+}
+
+func (m Model) viewStatus() string {
+	// esquerda: resumo e aviso
+	summary := fmt.Sprintf(" %d servidores · %d pastas", len(m.cfg.Hosts), len(m.cfg.Folders))
+	if m.current() != nil {
+		summary = fmt.Sprintf(" aba %d de %d", m.tab, len(m.sessions))
+	}
+	left := sDim.Render(summary)
+	if m.toast != "" {
+		icon, st := "✓ ", sOk
+		if m.toastErr {
+			icon, st = "✗ ", sErr
+		}
+		left += "   " + st.Render(icon+m.toast)
 	}
 
-	var keys string
-	switch {
-	case m.current() != nil:
-		keys = "ctrl+b Início · arrastar copia · botão direito cola · rodinha ou shift+↑↓ rola"
-	case m.modal != nil:
-		keys = "tab próximo · enter confirmar · esc fechar"
-	case m.searching:
-		keys = "digite pra buscar · enter ok · esc limpar"
-	case m.focus == focusSide:
-		keys = "enter abrir · e editar pasta · a servidor · n pasta · d apagar · / buscar · q sair"
-	default:
-		keys = "enter conectar · t tela cheia · a novo · e editar · d apagar · n pasta · / buscar · , ajustes · q sair"
+	// direita: atalhos com a tecla em destaque, enquanto couberem
+	key := lipgloss.NewStyle().Foreground(cFg).Bold(true)
+	budget := m.width - lipgloss.Width(left) - 3
+	var parts []string
+	used := 0
+	for _, h := range m.statusHints() {
+		part := key.Render(h.key) + " " + sDim.Render(h.desc)
+		w := lipgloss.Width(part)
+		if len(parts) > 0 {
+			w += 3 // espaço entre atalhos
+		}
+		if used+w > budget {
+			break
+		}
+		parts = append(parts, part)
+		used += w
 	}
-	right := sFaint.Render(keys + " ")
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		return runewidth.Truncate(left, m.width, "…")
+	right := strings.Join(parts, "   ") + " "
+
+	// aviso grande demais: ele tem prioridade, mas corta pra caber na linha
+	if lipgloss.Width(left) > m.width {
+		return lipgloss.NewStyle().MaxWidth(m.width).Render(left)
 	}
+	gap := max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right))
 	return left + strings.Repeat(" ", gap) + right
 }
