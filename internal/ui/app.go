@@ -109,6 +109,17 @@ func (m Model) Init() tea.Cmd { return tea.Batch(checkIcons, checkUpdate(m.versi
 func (m *Model) cards() []config.Host {
 	var out []config.Host
 	q := strings.ToLower(m.query)
+	// "#tag" filtra por tag: exata se existir, senão pelo começo (enquanto digita)
+	if strings.HasPrefix(q, "#") && len(q) > 1 {
+		tag := q[1:]
+		exact := hostHasTag(m.cfg, tag)
+		for _, h := range m.cfg.Hosts {
+			if matchTag(h, tag, exact) {
+				out = append(out, h)
+			}
+		}
+		return out
+	}
 	for _, h := range m.cfg.Hosts {
 		if q != "" {
 			hay := strings.ToLower(strings.Join(append([]string{h.Name, h.Host, h.Folder}, h.Tags...), " "))
@@ -690,6 +701,18 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		m.focus = focusGrid
 		m.cardSel = i
 		x, y := z.Pos(msg)
+		// linha das tags (borda + nome + endereço): clicar numa tag filtra por ela
+		if y == 3 {
+			_, spans := cardTagsLine(h, m.cardW()-4)
+			for _, s := range spans {
+				if x-2 >= s.start && x-2 < s.end {
+					m.query, m.searching = "#"+s.tag, false
+					m.cardSel, m.gridOff = 0, 0
+					m.say("mostrando servidores com a tag "+s.tag+" · esc limpa", false)
+					return nil
+				}
+			}
+		}
 		// linha dos botões: borda(1) + 3 linhas de conteúdo
 		if y == 4 {
 			if x >= 2 && x < 2+len(btnConnect) {

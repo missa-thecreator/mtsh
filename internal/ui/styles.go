@@ -1,18 +1,29 @@
 package ui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"os"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
+)
 
 // Paleta igual à da preview.
 var (
 	cFg    = lipgloss.Color("#D4DCD7")
 	cDim   = lipgloss.Color("#7A8881")
 	cFaint = lipgloss.Color("#44514B")
-	cLine  = lipgloss.Color("#2C3531")
-	cSel   = lipgloss.Color("#232B27")
-	cAcc   = lipgloss.Color("#F0B429")
-	cOk    = lipgloss.Color("#4FD1B5")
-	cErr   = lipgloss.Color("#FF6B6B")
-	cDark  = lipgloss.Color("#121614")
+	// fundos e bordas: um tom por modo de cor. Em 256 cores os tons escuros
+	// esverdeados viram todos a mesma cor, então ali usamos cinzas da paleta.
+	cLine = lipgloss.CompleteColor{TrueColor: "#323C37", ANSI256: "238", ANSI: "8"}
+	cSel  = lipgloss.CompleteColor{TrueColor: "#33403A", ANSI256: "237", ANSI: "8"}
+	cAcc  = lipgloss.Color("#F0B429")
+	cOk   = lipgloss.Color("#4FD1B5")
+	cErr  = lipgloss.Color("#FF6B6B")
+	cDark = lipgloss.Color("#121614")
+
+	// fundos das regiões (ver paint.go)
+	cBg    = lipgloss.CompleteColor{TrueColor: "#121614", ANSI256: "233", ANSI: "0"} // área principal
+	cPanel = lipgloss.CompleteColor{TrueColor: "#212925", ANSI256: "235", ANSI: "0"} // abas, lateral, rodapé
 )
 
 var (
@@ -25,7 +36,8 @@ var (
 	sBold  = lipgloss.NewStyle().Foreground(cFg).Bold(true)
 
 	sLogo      = lipgloss.NewStyle().Background(cAcc).Foreground(cDark).Bold(true).Padding(0, 1)
-	sTabOn     = lipgloss.NewStyle().Background(cSel).Foreground(cFg).Padding(0, 2)
+	sTabOn     = lipgloss.NewStyle().Background(cAcc).Foreground(cDark).Bold(true).Padding(0, 2)
+	sTabOff    = lipgloss.NewStyle().Foreground(cDim).Padding(0, 2)
 	sBtnMain   = lipgloss.NewStyle().Background(cAcc).Foreground(cDark).Bold(true)
 	sBtnGhost  = lipgloss.NewStyle().Background(cLine).Foreground(cFg)
 	sSideTitle = lipgloss.NewStyle().Foreground(cDim).Bold(true)
@@ -63,4 +75,33 @@ func folderColor(id string) lipgloss.Color {
 		}
 	}
 	return cFg
+}
+
+// ---- perfil de cor ----
+
+// wantTrueColor reconhece terminais que aceitam cores completas mas nem sempre
+// avisam pela variável COLORTERM (o Windows Terminal dentro do WSL, por exemplo).
+// Sem isso o mtsh cai pra 256 cores e os tons escuros ficam todos iguais.
+func wantTrueColor(getenv func(string) string) bool {
+	if getenv("NO_COLOR") != "" {
+		return false
+	}
+	for _, v := range []string{"WT_SESSION", "KITTY_WINDOW_ID", "ALACRITTY_WINDOW_ID", "WEZTERM_EXECUTABLE"} {
+		if getenv(v) != "" {
+			return true
+		}
+	}
+	switch getenv("TERM_PROGRAM") {
+	case "vscode", "WezTerm", "iTerm.app", "ghostty", "Hyper":
+		return true
+	}
+	return false
+}
+
+// SetupColors liga as cores completas nos terminais conhecidos (chamar antes
+// de desenhar a primeira tela).
+func SetupColors() {
+	if lipgloss.ColorProfile() != termenv.TrueColor && wantTrueColor(os.Getenv) {
+		lipgloss.SetColorProfile(termenv.TrueColor)
+	}
 }

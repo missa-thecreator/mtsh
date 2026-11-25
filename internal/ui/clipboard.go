@@ -34,7 +34,7 @@ type pastedMsg struct {
 
 // sessionOrigin: canto de cima da área da sessão na tela. A barra lateral
 // ocupa sideW colunas, mais 1 de margem; em cima fica a linha das abas.
-const sessionOriginX, sessionOriginY = sideW + 1, 1
+const sessionOriginX, sessionOriginY = sideW + 1, 2 // + barra de título da sessão
 
 // sessionMouse trata o mouse na área da sessão. ok = false deixa o clique pro
 // resto da tela (abas, barra lateral, rodinha).

@@ -72,6 +72,7 @@ func main() {
 		fail(err)
 	}
 
+	ui.SetupColors()
 	p := tea.NewProgram(ui.New(*cfgPath, cfg, v, version), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fail(err)

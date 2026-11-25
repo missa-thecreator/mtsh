@@ -29,6 +29,7 @@ type hostModal struct {
 	orig *config.Host // nil = novo
 
 	name, addr, port, user, pass textinput.Model
+	tags                         textinput.Model // separadas por vírgula
 	folder                       string
 	auth                         string
 	key                          string // chave colada (texto)
@@ -44,6 +45,7 @@ func newHostModal(m *Model, orig *config.Host, folder string) *hostModal {
 	h := &hostModal{
 		name: newInput("meu-servidor", 34), addr: newInput("192.168.1.10 ou servidor.com", 26),
 		port: newInput("22", 6), user: newInput("root", 34), pass: newInput("digite a senha", 34),
+		tags:   newInput("prod, banco (opcional)", 34),
 		folder: folder, auth: config.AuthKey, remember: true,
 	}
 	h.port.CharLimit = 5
@@ -59,6 +61,9 @@ func newHostModal(m *Model, orig *config.Host, folder string) *hostModal {
 			h.port.SetValue(strconv.Itoa(orig.Port))
 		}
 		h.folder = orig.Folder
+		if len(orig.Tags) > 0 {
+			h.tags.SetValue(strings.Join(orig.Tags, ", "))
+		}
 		h.auth = orig.AuthType()
 		h.keepKey = orig.Key != ""
 		h.hasSavedPass = m.vault.Has(orig.Name)
@@ -73,7 +78,7 @@ func newHostModal(m *Model, orig *config.Host, folder string) *hostModal {
 }
 
 func (h *hostModal) fields() []string {
-	f := []string{"name", "addr", "port", "user", "folder", "auth"}
+	f := []string{"name", "addr", "port", "user", "folder", "tags", "auth"}
 	switch h.auth {
 	case config.AuthKey:
 		f = append(f, "key")
@@ -86,7 +91,7 @@ func (h *hostModal) fields() []string {
 func (h *hostModal) cur() string { return h.fields()[h.focus] }
 
 func (h *hostModal) inputs() map[string]*textinput.Model {
-	return map[string]*textinput.Model{"name": &h.name, "addr": &h.addr, "port": &h.port, "user": &h.user, "pass": &h.pass}
+	return map[string]*textinput.Model{"name": &h.name, "addr": &h.addr, "port": &h.port, "user": &h.user, "pass": &h.pass, "tags": &h.tags}
 }
 
 func (h *hostModal) setFocus(i int) {
@@ -147,6 +152,15 @@ func (h *hostModal) update(m *Model, msg tea.Msg) (tea.Cmd, bool) {
 			return nil, false
 		case k.Type == tea.KeyBackspace || k.Type == tea.KeyDelete:
 			h.key = ""
+			return nil, false
+		}
+	}
+
+	// no campo de tags, tab completa a tag sugerida (se houver)
+	if cur == "tags" && k.String() == "tab" {
+		if sug := suggestTag(h.tags.Value(), allTags(m.cfg)); sug != "" {
+			h.tags.SetValue(completeTag(h.tags.Value(), sug))
+			h.tags.CursorEnd()
 			return nil, false
 		}
 	}
@@ -226,7 +240,7 @@ func (h *hostModal) click(m *Model, mm tea.MouseMsg) (tea.Cmd, bool) {
 			return nil, false
 		}
 	}
-	for _, id := range []string{"name", "addr", "port", "user", "pass", "key"} {
+	for _, id := range []string{"name", "addr", "port", "user", "tags", "pass", "key"} {
 		if clicked("h:"+id, mm) {
 			h.focusID(id)
 		}
@@ -284,8 +298,8 @@ func (h *hostModal) submit(m *Model) (tea.Cmd, bool) {
 	savePass := h.auth == config.AuthPassword && h.remember && h.pass.Value() != ""
 
 	host := config.Host{Name: name, Folder: h.folder, Host: addr, User: strings.TrimSpace(h.user.Value()), Port: port, Auth: h.auth}
+	host.Tags = parseTags(h.tags.Value())
 	if h.orig != nil {
-		host.Tags = h.orig.Tags
 		// mantém a distro detectada (só some se o endereço mudar)
 		if h.orig.Host == host.Host && h.orig.Port == host.Port {
 			host.OS, host.OSLike, host.OSName = h.orig.OS, h.orig.OSLike, h.orig.OSName
@@ -320,10 +334,32 @@ func (h *hostModal) view(m *Model) string {
 		fieldRow("Endereço", f == "addr" || f == "port", addrLine),
 		fieldRow("Usuário", f == "user", in("user", h.user)),
 		fieldRow("Pasta", f == "folder", folder),
+		fieldRow("Tags", f == "tags", in("tags", h.tags)),
+	}
+	// etiquetas já reconhecidas e, no campo de tags, a sugestão pro tab
+	var chips []string
+	for _, t := range parseTags(h.tags.Value()) {
+		chips = append(chips, tagStyle(t).Render(t))
+	}
+	hint := strings.Join(chips, "  ")
+	if f == "tags" {
+		if sug := suggestTag(h.tags.Value(), allTags(m.cfg)); sug != "" {
+			if hint != "" {
+				hint += "   "
+			}
+			hint += sFaint.Render("tab completa: ") + tagStyle(sug).Render(sug)
+		} else if hint == "" {
+			hint = sFaint.Render("separe por vírgula")
+		}
+	}
+	if hint != "" {
+		rows = append(rows, fieldRow("", false, hint))
+	}
+	rows = append(rows, []string{
 		"",
 		fieldRow("Acesso", f == "auth", strings.Join(seg, " ")+sFaint.Render("  ◂ ▸")),
 		"",
-	}
+	}...)
 
 	switch h.auth {
 	case config.AuthKey:

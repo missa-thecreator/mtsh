@@ -20,30 +20,34 @@ func (m Model) View() string {
 	if m.width == 0 {
 		return ""
 	}
+	// cada região com o seu fundo: painel (abas, lateral, rodapé) e área principal
+	side := paint(m.viewSide(), sideW, cPanel)
+	mainW := m.width - sideW
 	var body string
 	if m.modal != nil {
 		// janela no meio da área principal (ou da tela toda, se não couber)
 		dlg := m.modal.view(&m)
 		if lipgloss.Width(dlg) <= m.mainW() {
-			body = lipgloss.JoinHorizontal(lipgloss.Top, m.viewSide(),
-				lipgloss.Place(m.mainW()+2, m.bodyH(), lipgloss.Center, lipgloss.Center, dlg))
+			body = lipgloss.JoinHorizontal(lipgloss.Top, side,
+				paint(lipgloss.Place(mainW, m.bodyH(), lipgloss.Center, lipgloss.Center, dlg), mainW, cBg))
 		} else {
-			body = lipgloss.Place(m.width, m.bodyH(), lipgloss.Center, lipgloss.Center, dlg)
+			body = paint(lipgloss.Place(m.width, m.bodyH(), lipgloss.Center, lipgloss.Center, dlg), m.width, cBg)
 		}
 	} else {
 		main := m.viewMain()
 		if m.current() != nil {
 			main = m.viewSession()
 		}
-		body = lipgloss.JoinHorizontal(lipgloss.Top, m.viewSide(), main)
+		body = lipgloss.JoinHorizontal(lipgloss.Top, side, paint(main, mainW, cBg))
 	}
-	return zone.Scan(lipgloss.JoinVertical(lipgloss.Left, m.viewTabs(), body, m.viewStatus()))
+	return zone.Scan(lipgloss.JoinVertical(lipgloss.Left,
+		paint(m.viewTabs(), m.width, cPanel), body, paint(m.viewStatus(), m.width, cPanel)))
 }
 
 // ---- barra de abas ----
 
 func (m Model) viewTabs() string {
-	left := sLogo.Render("mtsh") + m.viewTabLabels()
+	left := sLogo.Render("mtsh") + " " + m.viewTabLabels()
 	right := zone.Mark("act:settings", sBtnGhost.Foreground(cDim).Render(" Ajustes ")) + " "
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
@@ -82,7 +86,7 @@ func (m Model) viewSide() string {
 	}
 	b.WriteString(" " + zone.Mark("act:folder", sBtnGhost.Render(" + Pasta ")))
 
-	border := cLine
+	var border lipgloss.TerminalColor = cLine
 	if focused {
 		border = cAcc
 	}
@@ -119,27 +123,47 @@ func (m Model) treeLine(r treeRow, i, w int, focused bool) string {
 		}
 		isCtx = false
 	}
-	text = runewidth.Truncate(" "+text, w-len(count)-2, "…")
-	line := runewidth.FillRight(text, w-len(count)-1) + count + " "
+	// sessão aberta: bolinha verde no lugar da contagem
+	if r.kind == rowHost && m.hasSession(r.host.Name) {
+		count = "●"
+	}
+	cw := runewidth.StringWidth(count)
+	avail := w - 2 - cw // marcador (1) + texto + contagem + espaço (1)
+	body := runewidth.FillRight(runewidth.Truncate(text, avail, "…"), avail)
 
+	inSession := m.current() != nil
+	active := inSession && r.kind == rowHost && r.host.Name == m.sessionHost()
+	selected := !inSession && i == m.sideSel
+
+	countStyle := func(st lipgloss.Style) string {
+		if count == "●" {
+			return st.Foreground(cOk).Render(count) + st.Render(" ")
+		}
+		return st.Render(count + " ")
+	}
+	bar := sAcc.Render("▌")
 	switch {
-	case i == m.sideSel && focused:
-		return sRowSelFocus.Render(line)
-	case i == m.sideSel:
-		return sRowSel.Render(line)
+	case active:
+		// a sessão em que você está, sempre marcada durante a sessão
+		st := lipgloss.NewStyle().Background(cSel).Foreground(cAcc).Bold(true)
+		return bar + st.Render(body) + countStyle(lipgloss.NewStyle().Background(cSel))
+	case selected && focused:
+		return bar + sRowSelFocus.Render(body) + countStyle(sRowSelFocus)
+	case selected:
+		return sDim.Render("▌") + sRowSel.Render(body) + countStyle(sRowSel)
 	case r.kind == rowFolder:
 		// pasta na cor escolhida (negrito se for a pasta aberta à direita)
-		st := lipgloss.NewStyle().Foreground(folderColor(m.cfg.Style(r.path).Color)).Bold(isCtx)
-		return st.Render(runewidth.FillRight(text, w-len(count)-1)) + sFaint.Render(count+" ")
-	case isCtx:
-		return sRowCtx.Render(line)
+		st := lipgloss.NewStyle().Foreground(folderColor(m.cfg.Style(r.path).Color)).Bold(isCtx && !inSession)
+		return " " + st.Render(body) + countStyle(sFaint)
+	case isCtx && !inSession:
+		return " " + sRowCtx.Render(body) + countStyle(sRowCtx)
 	case r.kind == rowHost:
 		// símbolo da distro colorido, resto apagado
 		mark := m.markChar(r.host)
-		before, after, _ := strings.Cut(line, mark)
-		return sDim.Render(before) + m.hostMark(r.host) + sDim.Render(after)
+		before, after, _ := strings.Cut(body, mark)
+		return " " + sDim.Render(before) + m.hostMark(r.host) + sDim.Render(after) + countStyle(sFaint)
 	}
-	return sFg.Render(runewidth.FillRight(text, w-len(count)-1)) + sFaint.Render(count+" ")
+	return " " + sFg.Render(body) + countStyle(sFaint)
 }
 
 // ---- área principal ----
@@ -150,6 +174,9 @@ func (m Model) viewMain() string {
 
 	var title string
 	switch {
+	case strings.HasPrefix(m.query, "#") && len(m.query) > 1:
+		tag := strings.ToLower(m.query[1:])
+		title = sBold.Render("Tag: ") + tagStyle(tag).Bold(true).Render(tag) + sFaint.Render("  (esc limpa)")
 	case m.query != "":
 		title = sBold.Render("Busca: ") + sAcc.Render(m.query)
 	case m.ctx == "":
@@ -220,8 +247,14 @@ func (m Model) viewCard(h config.Host, w int, sel bool) string {
 		nameStyle = nameStyle.Foreground(cAcc)
 	}
 	name := m.hostMark(h) + " " + nameStyle.Render(runewidth.Truncate(h.Name, inner-2, "…"))
-	if m.query != "" && h.Folder != "" {
-		right := sFaint.Render(runewidth.Truncate(config.Base(h.Folder), inner/2, "…"))
+	right := ""
+	switch {
+	case m.hasSession(h.Name):
+		right = sOk.Render("● conectado")
+	case m.query != "" && h.Folder != "":
+		right = sFaint.Render(runewidth.Truncate(config.Base(h.Folder), inner/2, "…"))
+	}
+	if right != "" {
 		if gap := inner - lipgloss.Width(name) - lipgloss.Width(right); gap > 0 {
 			name += strings.Repeat(" ", gap) + right
 		}
@@ -235,19 +268,8 @@ func (m Model) viewCard(h config.Host, w int, sel bool) string {
 		who += fmt.Sprintf(":%d", h.Port)
 	}
 
-	// linha do sistema + tags, ex: "Ubuntu 24.04 · k8s"
-	tags := osLabel(h)
-	if len(h.Tags) > 0 {
-		t := strings.Join(h.Tags, "  ")
-		if tags != "" {
-			t = runewidth.Truncate(t, max(0, inner-lipgloss.Width(tags)-3), "…")
-			tags += sFaint.Render(" · ")
-		}
-		tags += sOk.Render(runewidth.Truncate(t, inner, "…"))
-	}
-	if tags == "" {
-		tags = sFaint.Render("sistema aparece ao conectar")
-	}
+	// linha do sistema + tags, ex: "Ubuntu 24.04 · k8s"; clicar numa tag filtra
+	tags, _ := cardTagsLine(h, inner)
 
 	connect := sBtnGhost.Render(btnConnect)
 	if sel {
@@ -255,7 +277,7 @@ func (m Model) viewCard(h config.Host, w int, sel bool) string {
 	}
 	buttons := connect + " " + sBtnGhost.Foreground(cDim).Render(btnEdit)
 
-	border := cLine
+	var border lipgloss.TerminalColor = cLine
 	if focused {
 		border = cAcc
 	} else if sel {
@@ -271,11 +293,8 @@ func (m Model) viewCard(h config.Host, w int, sel bool) string {
 
 func (m Model) viewStatus() string {
 	left := sDim.Render(fmt.Sprintf(" %d servidores · %d pastas", len(m.cfg.Hosts), len(m.cfg.Folders)))
-	if s := m.current(); s != nil {
-		left = sDim.Render(" ") + sOk.Render("● ") + sFg.Render(s.Name)
-		if h, ok := m.hostByName(s.Name); ok {
-			left += sDim.Render(" · " + h.Target())
-		}
+	if m.current() != nil {
+		left = sDim.Render(fmt.Sprintf(" aba %d de %d", m.tab, len(m.sessions)))
 	}
 	if m.toast != "" {
 		st := sOk

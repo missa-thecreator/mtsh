@@ -61,8 +61,74 @@ func (m *Model) sshCommand(h config.Host) (c *exec.Cmd, ctl string, err error) {
 }
 
 // termSize é o espaço da aba de sessão (tudo à direita da barra lateral).
+// A primeira linha da área é a barra de título da sessão; o terminal fica embaixo.
 func (m *Model) termSize() (cols, rows int) {
-	return max(10, m.width-sideW-1), max(3, m.bodyH())
+	return max(10, m.width-sideW-1), max(3, m.bodyH()-1)
+}
+
+// sessionHost é o servidor da aba de sessão aberta ("" no Início).
+func (m *Model) sessionHost() string {
+	if s := m.current(); s != nil {
+		return s.Name
+	}
+	return ""
+}
+
+// hasSession diz se o servidor tem uma sessão aberta (e ainda conectada).
+func (m *Model) hasSession(name string) bool {
+	for _, s := range m.sessions {
+		if done, _ := s.Exited(); s.Name == name && !done {
+			return true
+		}
+	}
+	return false
+}
+
+// sessionHeader é a barra de título da sessão: onde você está, sempre à vista.
+func (m Model) sessionHeader(s *session.Session, cols int) string {
+	bg := lipgloss.NewStyle().Background(cSel)
+	h, ok := m.hostByName(s.Name)
+	if !ok {
+		return bg.Foreground(cFg).Bold(true).Width(cols).Render(" " + s.Name)
+	}
+	mark := lipgloss.NewStyle().Background(cSel).Foreground(cDim).Render(m.markChar(h))
+	if d, ok := distroOf(h); ok && !m.cfg.SimpleIcons {
+		mark = lipgloss.NewStyle().Background(cSel).Foreground(d.color).Render(d.glyph)
+	} else if ok {
+		mark = lipgloss.NewStyle().Background(cSel).Foreground(d.color).Render("●")
+	}
+	target := h.Target()
+	if h.Port != 0 && h.Port != 22 {
+		target += fmt.Sprintf(":%d", h.Port)
+	}
+	parts := []string{
+		bg.Render(" ") + mark + bg.Foreground(cAcc).Bold(true).Render(" "+h.Name),
+		bg.Foreground(cFg).Render(target),
+	}
+	if h.Folder != "" {
+		st := m.cfg.Style(h.Folder)
+		parts = append(parts, bg.Foreground(folderColor(st.Color)).Render(strings.ReplaceAll(h.Folder, "/", " › ")))
+	}
+	if h.OSName != "" {
+		parts = append(parts, bg.Foreground(cDim).Render(h.OSName))
+	}
+	if done, _ := s.Exited(); done {
+		parts = append(parts[:2], bg.Foreground(cErr).Render("desconectado"))
+	}
+	// sem espaço, larga as partes do fim (distro, depois pasta) e encurta o resto
+	sep := bg.Foreground(cFaint).Render("  ·  ")
+	line := strings.Join(parts, sep)
+	for len(parts) > 1 && lipgloss.Width(line) > cols {
+		parts = parts[:len(parts)-1]
+		line = strings.Join(parts, sep)
+	}
+	if lipgloss.Width(line) > cols {
+		line = lipgloss.NewStyle().MaxWidth(cols).Render(line)
+	}
+	if w := lipgloss.Width(line); w < cols {
+		line += bg.Render(strings.Repeat(" ", cols-w))
+	}
+	return line
 }
 
 func (m *Model) current() *session.Session {
@@ -305,6 +371,7 @@ func (m Model) viewSession() string {
 		lines = append(lines, "")
 	}
 	lines = lines[:rows]
+	header := m.sessionHeader(s, cols)
 	if off, hist := s.Scroll(); off > 0 {
 		msg := fmt.Sprintf(" ↑ histórico  ·  %d de %d linhas acima  ·  rodinha ou shift+↓ desce  ·  digitar volta pro fim ", off, hist)
 		lines[rows-1] = lipgloss.NewStyle().Background(cLine).Foreground(cFg).Width(cols).Render(msg)
@@ -315,27 +382,52 @@ func (m Model) viewSession() string {
 		}
 		lines[rows-1] = lipgloss.NewStyle().Background(cAcc).Foreground(cDark).Bold(true).Width(cols).Render(msg)
 	}
-	return lipgloss.NewStyle().PaddingLeft(1).Render(strings.Join(lines, "\n"))
+	return lipgloss.NewStyle().PaddingLeft(1).Render(header + "\n" + strings.Join(lines, "\n"))
 }
 
 func (m Model) viewTabLabels() string {
-	tab := func(i int, label string) string {
-		st := lipgloss.NewStyle().Foreground(cDim).Padding(0, 2)
+	// aba ativa em destaque (fundo âmbar); nas outras, o símbolo vem colorido
+	tab := func(i int, mark, label string) string {
+		id := fmt.Sprintf("tab:%d", i)
 		if i == m.tab {
-			st = sTabOn
+			return zone.Mark(id, sTabOn.Render(strings.TrimSpace(mark+" "+label)))
 		}
-		return zone.Mark(fmt.Sprintf("tab:%d", i), st.Render(label))
+		if mark == "" {
+			return zone.Mark(id, sTabOff.Render(label))
+		}
+		return zone.Mark(id, lipgloss.NewStyle().PaddingLeft(2).Render(m.tabMark(i))+sTabOff.PaddingLeft(1).Render(label))
 	}
-	out := tab(0, "Início")
+	out := tab(0, "", "Início")
 	for i, s := range m.sessions {
-		dot := sOk.Render("●")
-		if done, _ := s.Exited(); done {
-			dot = sErr.Render("○")
-		}
 		x := zone.Mark(fmt.Sprintf("tabx:%d", i+1), sFaint.Render(" ×"))
-		out += tab(i+1, dot+" "+s.Name) + x
+		out += tab(i+1, m.tabMarkPlain(i+1), s.Name) + x
 	}
 	return out
+}
+
+// tabMarkPlain é o símbolo da aba sem cor (pra aba ativa, de estilo único):
+// logo da distro, ou ○ se a sessão caiu.
+func (m Model) tabMarkPlain(i int) string {
+	s := m.sessions[i-1]
+	if done, _ := s.Exited(); done {
+		return "○"
+	}
+	if h, ok := m.hostByName(s.Name); ok {
+		return m.markChar(h)
+	}
+	return "●"
+}
+
+// tabMark é o símbolo colorido das abas inativas (vermelho se a sessão caiu).
+func (m Model) tabMark(i int) string {
+	s := m.sessions[i-1]
+	if done, _ := s.Exited(); done {
+		return sErr.Render("○")
+	}
+	if h, ok := m.hostByName(s.Name); ok {
+		return m.hostMark(h)
+	}
+	return sOk.Render("●")
 }
 
 // ---- detecção do sistema (distro) ----
