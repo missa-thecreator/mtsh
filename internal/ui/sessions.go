@@ -249,12 +249,13 @@ func (m *Model) onSessionExit(s *session.Session) {
 // askQuit confirma antes de sair com sessões abertas.
 func (m *Model) askQuit() tea.Cmd {
 	n := m.aliveSessions()
-	if n == 0 {
-		return tea.Quit
+	// sem sessões abertas, enter já sai; com sessões, enter cancela pra não derrubar conexão sem querer
+	text := "Fechar o mtsh?"
+	if n > 0 {
+		text = fmt.Sprintf("Tem %d sessão(ões) aberta(s).\nSair encerra todas.", n)
 	}
 	m.modal = &confirmModal{
-		title: "Sair do mtsh", okLabel: "Sair",
-		text: fmt.Sprintf("Tem %d sessão(ões) aberta(s).\nSair encerra todas.", n),
+		title: "Sair do mtsh", okLabel: "Sair", focusOK: n == 0, text: text,
 		onOK: func(m *Model) tea.Cmd {
 			for _, s := range m.sessions {
 				s.Close()
