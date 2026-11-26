@@ -73,8 +73,11 @@ func main() {
 	}
 
 	ui.SetupColors()
+	restoreBg := ui.SetTerminalBg()
 	p := tea.NewProgram(ui.New(*cfgPath, cfg, v, version), tea.WithAltScreen(), tea.WithMouseCellMotion())
-	if _, err := p.Run(); err != nil {
+	_, err = p.Run()
+	restoreBg()
+	if err != nil {
 		fail(err)
 	}
 }

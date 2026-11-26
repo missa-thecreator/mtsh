@@ -30,6 +30,19 @@ func newInput(placeholder string, width int) textinput.Model {
 	return ti
 }
 
+// fieldBox desenha um campo com cara de caixa de texto: fundo rebaixado e
+// um espaço de cada lado. width é a largura do conteúdo.
+func fieldBox(content string, width int) string {
+	return paint(" "+content, width+2, cField)
+}
+
+// selectLabel é o conteúdo de um seletor (◂ ▸): o valor e as setas na ponta.
+func selectLabel(value string, width int) string {
+	arrows := sFaint.Render("◂ ▸")
+	gap := max(1, width-lipgloss.Width(value)-lipgloss.Width(arrows))
+	return sFg.Render(value) + strings.Repeat(" ", gap) + arrows
+}
+
 func dialog(title string, width int, body string) string {
 	inner := width - 2
 	closeBtn := zone.Mark("m:close", " × ")
@@ -37,8 +50,10 @@ func dialog(title string, width int, body string) string {
 		Width(inner - lipgloss.Width(closeBtn)).Render(" " + title)
 	bar += lipgloss.NewStyle().Background(cAcc).Foreground(cDark).Bold(true).Render(closeBtn)
 	content := lipgloss.NewStyle().Padding(1, 2, 0, 2).Width(inner).Render(body)
-	return lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder()).BorderForeground(cAcc).
+	box := lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder()).BorderForeground(cAcc).
 		Render(bar + "\n" + content)
+	// janela com fundo de painel, pra se destacar da área principal
+	return paint(box, width, cPanel)
 }
 
 func fieldRow(label string, focused bool, value string) string {

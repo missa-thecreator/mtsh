@@ -315,10 +315,10 @@ func (h *hostModal) submit(m *Model) (tea.Cmd, bool) {
 
 func (h *hostModal) view(m *Model) string {
 	f := h.cur()
-	in := func(id string, ti textinput.Model) string { return zone.Mark("h:"+id, ti.View()) }
+	in := func(id string, ti textinput.Model) string { return zone.Mark("h:"+id, fieldBox(ti.View(), ti.Width)) }
 
 	addrLine := in("addr", h.addr) + sDim.Render("  porta ") + in("port", h.port)
-	folder := zone.Mark("h:folder", sFg.Render(folderLabel(h.folder))+sFaint.Render("  ◂ ▸"))
+	folder := zone.Mark("h:folder", fieldBox(selectLabel(folderLabel(h.folder), 34), 34))
 
 	var seg []string
 	for _, o := range authOptions {

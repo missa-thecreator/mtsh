@@ -65,16 +65,20 @@ func (m Model) viewSide() string {
 
 	b.WriteString(sSideTitle.Render(" SERVIDORES") + "\n")
 
-	var search string
+	// busca com cara de campo: caixa rebaixada, "/" na ponta como dica
+	fw := inner - 4 // margem de 1 de cada lado + espaço interno do campo
+	var content string
 	switch {
 	case m.searching:
-		search = sFg.Render(" "+m.searchIcon()+" "+m.query) + sAcc.Render("▏")
+		content = sAcc.Render(m.searchIcon()) + sFg.Render(" "+m.query) + sAcc.Render("▏")
 	case m.query != "":
-		search = sAcc.Render(" " + m.searchIcon() + " " + m.query)
+		content = sAcc.Render(m.searchIcon() + " " + m.query)
 	default:
-		search = sFaint.Render(" " + m.searchIcon() + " buscar            /")
+		hint := sFaint.Render("/")
+		label := sFaint.Render(m.searchIcon() + " buscar")
+		content = label + strings.Repeat(" ", max(1, fw-lipgloss.Width(label)-1)) + hint
 	}
-	b.WriteString(zone.Mark("act:search", search) + "\n\n")
+	b.WriteString(" " + zone.Mark("act:search", fieldBox(content, fw)) + "\n\n")
 
 	rows := m.treeRows()
 	end := min(len(rows), m.sideOff+m.treeVisible())

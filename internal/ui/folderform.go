@@ -216,7 +216,7 @@ func (f *folderModal) submit(m *Model) bool {
 }
 
 func (f *folderModal) view(m *Model) string {
-	parent := zone.Mark("f:parent", sFg.Render(folderLabel(f.parent))+sFaint.Render("  ◂ ▸"))
+	parent := zone.Mark("f:parent", fieldBox(selectLabel(folderLabel(f.parent), 30), 30))
 
 	// ícones em duas linhas
 	var iconRows []string
@@ -268,7 +268,7 @@ func (f *folderModal) view(m *Model) string {
 	preview := folderTitle(f.icon, f.color, name)
 
 	rows := []string{
-		zone.Mark("f:name", fieldRow("Nome", f.focus == 0, f.name.View())),
+		zone.Mark("f:name", fieldRow("Nome", f.focus == 0, fieldBox(f.name.View(), f.name.Width))),
 		fieldRow("Dentro de", f.focus == 1, parent),
 		"",
 		fieldRow("Ícone", f.focus == 2, strings.Join(iconRows, "\n")),
@@ -290,8 +290,8 @@ func (f *folderModal) view(m *Model) string {
 		title = "Editar pasta " + config.Base(f.orig)
 	}
 	btns := button("m:cancel", " Cancelar ", false, f.focus == 4) + "  " + button("m:ok", okLabel, true, f.focus == 5)
-	rows = append(rows, lipgloss.PlaceHorizontal(56, lipgloss.Right, btns), "")
-	return dialog(title, 62, strings.Join(rows, "\n"))
+	rows = append(rows, lipgloss.PlaceHorizontal(60, lipgloss.Right, btns), "")
+	return dialog(title, 66, strings.Join(rows, "\n"))
 }
 
 // folderTitle desenha "ícone nome" na cor da pasta.

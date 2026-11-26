@@ -1,11 +1,16 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
+	"golang.org/x/term"
 )
+
+// bgHex é o fundo da área principal; também vira o fundo do próprio terminal.
+const bgHex = "#121614"
 
 // Paleta igual à da preview.
 var (
@@ -22,8 +27,9 @@ var (
 	cDark = lipgloss.Color("#121614")
 
 	// fundos das regiões (ver paint.go)
-	cBg    = lipgloss.CompleteColor{TrueColor: "#121614", ANSI256: "233", ANSI: "0"} // área principal
+	cBg    = lipgloss.CompleteColor{TrueColor: bgHex, ANSI256: "233", ANSI: "0"}     // área principal
 	cPanel = lipgloss.CompleteColor{TrueColor: "#212925", ANSI256: "235", ANSI: "0"} // abas, lateral, rodapé
+	cField = lipgloss.CompleteColor{TrueColor: "#161B18", ANSI256: "234", ANSI: "0"} // campos de texto (rebaixados)
 )
 
 var (
@@ -104,4 +110,17 @@ func SetupColors() {
 	if lipgloss.ColorProfile() != termenv.TrueColor && wantTrueColor(os.Getenv) {
 		lipgloss.SetColorProfile(termenv.TrueColor)
 	}
+}
+
+// SetTerminalBg pinta o fundo do próprio terminal com o fundo do app (OSC 11).
+// Assim as margens que o terminal reserva fora da grade de caracteres (padding,
+// espaço da barra de rolagem, sobra da janela) ficam da mesma cor do app.
+// Devolve a função que restaura o fundo original (OSC 111). Terminais que não
+// conhecem esses códigos simplesmente ignoram.
+func SetTerminalBg() (restore func()) {
+	if lipgloss.ColorProfile() == termenv.Ascii || !term.IsTerminal(int(os.Stdout.Fd())) {
+		return func() {}
+	}
+	fmt.Fprint(os.Stdout, "\x1b]11;"+bgHex+"\x07")
+	return func() { fmt.Fprint(os.Stdout, "\x1b]111\x07") }
 }
