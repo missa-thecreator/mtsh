@@ -465,6 +465,11 @@ func (m *Model) saveHost(h *hostModal, host config.Host, savePass bool) error {
 		if err := m.vault.Rename(oldName, host.Name); err != nil {
 			return err
 		}
+		for i := range m.cfg.Databases { // bancos acessados por este servidor seguem o novo nome
+			if m.cfg.Databases[i].Via == oldName {
+				m.cfg.Databases[i].Via = host.Name
+			}
+		}
 	}
 	switch {
 	case host.Auth != config.AuthPassword || !h.remember:

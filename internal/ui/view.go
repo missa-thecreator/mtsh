@@ -37,6 +37,8 @@ func (m Model) View() string {
 		main := m.viewMain()
 		if m.current() != nil {
 			main = m.viewSession()
+		} else if v := m.currentDB(); v != nil {
+			main = m.viewDBTab(v)
 		}
 		body = lipgloss.JoinHorizontal(lipgloss.Top, side, paint(main, mainW, cBg))
 	}
@@ -110,7 +112,10 @@ func (m Model) treeLine(r treeRow, i, w int, focused bool) string {
 		isCtx = false
 	case rowAll:
 		text, count = "≡ Todos", fmt.Sprint(len(m.cfg.Hosts))
-		isCtx = isCtx && m.ctx == ""
+		isCtx = isCtx && m.ctx == "" && !m.dbMode
+	case rowDBs:
+		text, count = dbGlyph+" Bancos", fmt.Sprint(len(m.cfg.Databases))
+		isCtx = isCtx && m.dbMode
 	case rowFolder:
 		arrow := "▸"
 		if m.open[r.path] {
@@ -121,7 +126,7 @@ func (m Model) treeLine(r treeRow, i, w int, focused bool) string {
 			name = ic + " " + name
 		}
 		text, count = indent+arrow+" "+name, fmt.Sprint(m.cfg.Count(r.path))
-		isCtx = isCtx && m.ctx == r.path
+		isCtx = isCtx && m.ctx == r.path && !m.dbMode
 	case rowHost:
 		if r.depth == 0 {
 			text = m.markChar(r.host) + " " + r.host.Name // sem pasta: alinhado com as pastas da raiz
@@ -138,7 +143,7 @@ func (m Model) treeLine(r treeRow, i, w int, focused bool) string {
 	avail := w - 2 - cw // marcador (1) + texto + contagem + espaço (1)
 	body := runewidth.FillRight(runewidth.Truncate(text, avail, "…"), avail)
 
-	inSession := m.current() != nil
+	inSession := m.tab != 0 // numa aba (servidor ou banco)
 	active := inSession && r.kind == rowHost && r.host.Name == m.sessionHost()
 	selected := !inSession && i == m.sideSel
 
@@ -176,6 +181,9 @@ func (m Model) treeLine(r treeRow, i, w int, focused bool) string {
 // ---- área principal ----
 
 func (m Model) viewMain() string {
+	if m.dbMode {
+		return m.viewDBMain()
+	}
 	w := m.mainW()
 	cards := m.cards()
 
@@ -306,6 +314,11 @@ func (m Model) statusHints() []hint {
 	switch {
 	case m.modal != nil:
 		return []hint{{"enter", "confirmar"}, {"esc", "fechar"}, {"tab", "próximo campo"}}
+	case m.currentDB() != nil:
+		if m.currentDB().conn == nil {
+			return []hint{{"r", "reconectar"}, {"x", "fechar aba"}, {"ctrl+b", "Início"}}
+		}
+		return []hint{{"ctrl+b", "Início"}, {"F5", "roda"}, {"tab", "lista/editor/resultado"}, {"esc", "volta"}}
 	case m.current() != nil:
 		if done, _ := m.current().Exited(); done {
 			return []hint{{"enter", "reconectar"}, {"x", "fechar aba"}, {"ctrl+b", "Início"}}
@@ -320,10 +333,12 @@ func (m Model) statusHints() []hint {
 		return []hint{{"esc", "limpar filtro"}, {"enter", "conectar"}, {"e", "editar"}, {"/", "buscar"}}
 	case m.focus == focusTabs:
 		hs := []hint{{"↓", "menu"}, {"q/esc", "sair"}}
-		if len(m.sessions) > 0 {
+		if m.tabCount() > 0 {
 			hs = append([]hint{{"→", "sessões"}}, hs...)
 		}
 		return hs
+	case m.dbMode:
+		return []hint{{"enter", "conectar"}, {"a", "novo banco"}, {"e", "editar"}, {"d", "apagar"}, {"tab", "menu"}, {"q/esc", "sair"}}
 	case m.focus == focusSide:
 		return []hint{{"enter", "abrir"}, {"a", "servidor"}, {"n", "pasta"}, {"/", "buscar"}, {"q/esc", "sair"},
 			{"e", "editar pasta"}, {"d", "apagar"}, {"tab", "cards"}}
@@ -335,8 +350,8 @@ func (m Model) statusHints() []hint {
 func (m Model) viewStatus() string {
 	// esquerda: resumo e aviso
 	summary := fmt.Sprintf(" %d servidores · %d pastas", len(m.cfg.Hosts), len(m.cfg.Folders))
-	if m.current() != nil {
-		summary = fmt.Sprintf(" aba %d de %d", m.tab, len(m.sessions))
+	if m.tab != 0 {
+		summary = fmt.Sprintf(" aba %d de %d", m.tab, m.tabCount())
 	}
 	// versão alinhada com o começo da área principal
 	left := sDim.Render(runewidth.FillRight(summary, m.sideW()+2)) + sFaint.Render(m.version)

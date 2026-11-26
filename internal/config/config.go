@@ -27,7 +27,24 @@ type Host struct {
 	OS     string `yaml:"os,omitempty"`      // ubuntu, debian, alpine…
 	OSLike string `yaml:"os_like,omitempty"` // família, ex: debian
 	OSName string `yaml:"os_name,omitempty"` // ex: "Ubuntu 24.04"
+
 }
+
+// Database é um banco cadastrado. Com Via, o mtsh chega nele por um túnel na
+// conexão SSH desse servidor; sem Via, conecta direto do seu computador. A
+// senha fica no cofre (ver DBVaultKey).
+type Database struct {
+	Name   string `yaml:"name"`
+	Via    string `yaml:"via,omitempty"`  // nome do servidor; vazio = direto
+	Engine string `yaml:"engine"`         // mysql (vale pro MariaDB) | postgres
+	Host   string `yaml:"host,omitempty"` // como o servidor (ou você, se direto) enxerga o banco; vazio = 127.0.0.1
+	Port   int    `yaml:"port,omitempty"` // vazio = padrão do tipo
+	User   string `yaml:"user,omitempty"`
+	DB     string `yaml:"database,omitempty"` // base inicial
+}
+
+// DBVaultKey é o nome da senha do banco no cofre.
+func DBVaultKey(db string) string { return "db:" + db }
 
 const (
 	AuthPassword = "password"
@@ -99,6 +116,7 @@ type File struct {
 	Collapsed    []string               `yaml:"collapsed,omitempty"`     // pastas fechadas na barra lateral
 	SideWidth    int                    `yaml:"side_width,omitempty"`    // largura da barra lateral (0 = padrão)
 	Hosts        []Host                 `yaml:"hosts"`
+	Databases    []Database             `yaml:"databases,omitempty"`
 }
 
 // Style devolve o ícone e a cor da pasta p.

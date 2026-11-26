@@ -97,7 +97,9 @@ type Model struct {
 	newerTag  string // versão mais nova disponível ("" = nenhuma)
 	updatedTo string // versão já instalada nesta sessão (vale ao reabrir)
 
-	sftp map[*session.Session]*sftpView // gerenciador de arquivos de cada aba
+	sftp   map[*session.Session]*sftpView // gerenciador de arquivos de cada aba
+	dbTabs []*dbView                      // abas de banco (ficam depois das de servidor)
+	dbMode bool                           // área principal mostrando os bancos (linha Bancos do menu)
 }
 
 func New(cfgPath string, cfg *config.File, v *vault.Vault, version string) Model {
@@ -179,6 +181,9 @@ func (m *Model) clamp() {
 	m.sideOff = min(m.sideOff, max(0, len(rows)-tv))
 
 	n := len(m.cards())
+	if m.dbMode {
+		n = len(m.cfg.Databases)
+	}
 	m.cardSel = min(max(0, m.cardSel), max(0, n-1))
 	row, vis := m.cardSel/m.cols(), m.gridRows()
 	if row < m.gridOff {
@@ -222,11 +227,23 @@ func (m *Model) activateSide(toggle bool) tea.Cmd {
 	}
 	r := rows[m.sideSel]
 	m.query = ""
+	if r.kind != rowImport && r.kind != rowDBs {
+		if m.dbMode {
+			m.cardSel, m.gridOff = 0, 0
+		}
+		m.dbMode = false
+	}
 	switch r.kind {
 	case rowImport:
 		if toggle {
 			m.modal = newImportModal()
 		}
+	case rowDBs:
+		if !m.dbMode {
+			m.cardSel, m.gridOff = 0, 0
+		}
+		m.dbMode = true
+		return nil
 	case rowAll:
 		m.ctx = ""
 	case rowFolder:
@@ -402,6 +419,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case winHomeMsg:
 		m.onWinHome(msg)
 
+	case dbConnectedMsg, dbResultMsg, dbObjectsMsg:
+		cmd = m.onDBMsg(msg)
+
 	case iconStatusMsg:
 		m.onIconStatus(msg.st)
 
@@ -453,6 +473,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case m.current() != nil:
 			// numa aba de sessão o teclado vai pro servidor (inclusive ctrl+c)
 			cmd = m.sessionKey(msg)
+		case m.currentDB() != nil:
+			cmd = m.dbKey(m.currentDB(), msg)
 		case msg.String() == "ctrl+c":
 			cmd = m.askQuit()
 		case m.searching:
@@ -523,7 +545,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	m.toast = ""
 	k := msg.String()
 	if len(k) == 1 && k >= "1" && k <= "9" {
-		if i := int(k[0] - '0'); i <= len(m.sessions) {
+		if i := int(k[0] - '0'); i <= m.tabCount() {
 			m.tab = i
 		}
 		return nil
@@ -551,12 +573,22 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.searching, m.query = true, ""
 		return nil
 	case "a":
+		if m.dbMode {
+			m.modal = newDBForm(m, -1)
+			return nil
+		}
 		m.openNewHost()
 		return nil
 	case "n":
 		m.openNewFolder()
 		return nil
 	case "e":
+		if m.dbMode {
+			if m.focus == focusGrid && m.cardSel < len(m.cfg.Databases) {
+				m.modal = newDBForm(m, m.cardSel)
+			}
+			return nil
+		}
 		if m.focus == focusSide {
 			if r := m.treeRows()[m.sideSel]; r.kind == rowFolder {
 				m.modal = editFolderModal(m, r.path)
@@ -568,6 +600,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	case "d", "delete":
+		if m.dbMode {
+			if m.focus == focusGrid && m.cardSel < len(m.cfg.Databases) {
+				m.askDeleteDB(m.cardSel)
+			}
+			return nil
+		}
 		m.askDelete()
 		return nil
 	case "esc":
@@ -585,7 +623,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.focus = focusSide
 		case "right", "l":
 			// abre a primeira sessão; de lá, ctrl+b volta pro Início
-			if len(m.sessions) > 0 {
+			if m.tabCount() > 0 {
 				m.tab, m.focus = 1, focusSide
 			}
 		}
@@ -632,6 +670,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
+	if m.dbMode {
+		return m.dbGridKey(k)
+	}
 	cards := m.cards()
 	cols := m.cols()
 	switch k {
@@ -709,6 +750,11 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			return cmd
 		}
 	}
+	if v := m.currentDB(); v != nil {
+		if cmd, ok := m.dbMouse(v, msg); ok {
+			return cmd
+		}
+	}
 	switch msg.Button {
 	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
 		if msg.Action != tea.MouseActionPress {
@@ -723,6 +769,9 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				m.scrollSession(s, -d*3) // rodinha pra cima (d=-1) sobe 3 linhas
 			}
 			return nil
+		}
+		if m.tab != 0 && msg.X >= m.sideW() {
+			return nil // aba de banco: a rodinha fora da lista e da grade não faz nada
 		}
 		if msg.X < m.sideW() {
 			m.sideSel += d
@@ -740,9 +789,13 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	}
 
 	// abas
-	for i := 0; i <= len(m.sessions); i++ {
+	for i := 0; i <= m.tabCount(); i++ {
 		if i > 0 && zone.Get(fmt.Sprintf("tabx:%d", i)).InBounds(msg) {
-			m.closeTab(i)
+			if i > len(m.sessions) {
+				m.closeDBTab(m.dbTabs[i-len(m.sessions)-1])
+			} else {
+				m.closeTab(i)
+			}
 			return nil
 		}
 		if zone.Get(fmt.Sprintf("tab:%d", i)).InBounds(msg) {
@@ -750,8 +803,8 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			return nil
 		}
 	}
-	if m.current() != nil {
-		// na aba de sessão só a barra lateral responde ao clique (volta pro Início)
+	if m.tab != 0 {
+		// numa aba só a barra lateral responde ao clique (volta pro Início)
 		if msg.X >= m.sideW() {
 			return nil
 		}
@@ -759,9 +812,14 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	}
 
 	m.toast = ""
-	if zone.Get("act:new").InBounds(msg) {
+	if zone.Get("act:new").InBounds(msg) && !m.dbMode {
 		m.focus = focusGrid
 		m.openNewHost()
+		return nil
+	}
+	if zone.Get("act:newdb").InBounds(msg) && m.dbMode {
+		m.focus = focusGrid
+		m.modal = newDBForm(m, -1)
 		return nil
 	}
 	if zone.Get("act:settings").InBounds(msg) {
@@ -793,6 +851,9 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			r := m.treeRows()[i]
 			return m.activateSide(r.kind == rowImport || (r.kind == rowFolder && again) || (r.kind == rowHost && dbl))
 		}
+	}
+	if m.dbMode {
+		return m.dbCardClick(msg)
 	}
 	for i, h := range m.cards() {
 		z := zone.Get(fmt.Sprintf("card:%d", i))

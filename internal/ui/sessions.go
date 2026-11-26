@@ -463,6 +463,23 @@ func (m Model) viewTabLabels() string {
 		x := zone.Mark(fmt.Sprintf("tabx:%d", i+1), sFaint.Render(" ×"))
 		out += tab(i+1, m.tabMarkPlain(i+1), s.Name) + x
 	}
+	for j, v := range m.dbTabs {
+		i := len(m.sessions) + j + 1
+		x := zone.Mark(fmt.Sprintf("tabx:%d", i), sFaint.Render(" ×"))
+		id := fmt.Sprintf("tab:%d", i)
+		switch {
+		case i == m.tab && m.focus == focusTabs:
+			out += zone.Mark(id, sTabOn.Padding(0, 1).Render("›"+dbGlyph+" "+v.cfg.Name+"‹")) + x
+		case i == m.tab:
+			out += zone.Mark(id, sTabOn.Render(dbGlyph+" "+v.cfg.Name)) + x
+		default:
+			mark := sAcc.Render(dbGlyph)
+			if v.conn == nil && !v.connecting {
+				mark = sErr.Render(dbGlyph)
+			}
+			out += zone.Mark(id, lipgloss.NewStyle().PaddingLeft(2).Render(mark)+sTabOff.PaddingLeft(1).Render(v.cfg.Name)) + x
+		}
+	}
 	return out
 }
 
