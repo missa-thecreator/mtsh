@@ -150,3 +150,70 @@ func (c *confirmModal) view(m *Model) string {
 	body := sFg.Render(c.text) + "\n\n" + lipgloss.PlaceHorizontal(44, lipgloss.Right, btns) + "\n"
 	return dialog(c.title, 50, body)
 }
+
+// ---- pedir um texto (renomear, nova pasta) ----
+
+type promptModal struct {
+	title, label string
+	in           textinput.Model
+	err          string
+	onOK         func(text string) string // devolve o erro ("" = deu certo, fecha)
+}
+
+func newPromptModal(title, label, value string, onOK func(string) string) *promptModal {
+	p := &promptModal{title: title, label: label, in: newInput("", 34), onOK: onOK}
+	p.in.CharLimit = 255
+	p.in.SetValue(value)
+	p.in.CursorEnd()
+	p.in.Focus()
+	return p
+}
+
+func (p *promptModal) submit() bool {
+	text := strings.TrimSpace(p.in.Value())
+	switch {
+	case text == "":
+		p.err = "Informe o nome."
+	case strings.Contains(text, "/"):
+		p.err = "O nome não pode ter /."
+	default:
+		p.err = p.onOK(text)
+	}
+	return p.err == ""
+}
+
+func (p *promptModal) update(m *Model, msg tea.Msg) (tea.Cmd, bool) {
+	if mm, ok := isLeftClick(msg); ok {
+		switch {
+		case clicked("m:ok", mm):
+			return nil, p.submit()
+		case clicked("m:cancel", mm), clicked("m:close", mm):
+			return nil, true
+		}
+		return nil, false
+	}
+	if k, ok := msg.(tea.KeyMsg); ok {
+		switch k.String() {
+		case "esc":
+			return nil, true
+		case "enter":
+			return nil, p.submit()
+		}
+		p.err = ""
+	}
+	var cmd tea.Cmd
+	p.in, cmd = p.in.Update(msg)
+	return cmd, false
+}
+
+func (p *promptModal) view(m *Model) string {
+	rows := []string{fieldRow(p.label, true, fieldBox(p.in.View(), p.in.Width)), ""}
+	if p.err != "" {
+		rows = append(rows, sErr.Render("  "+p.err))
+	} else {
+		rows = append(rows, sFaint.Render("  enter confirma · esc cancela"))
+	}
+	btns := button("m:cancel", " Cancelar ", false, false) + "  " + button("m:ok", " OK ", true, true)
+	rows = append(rows, "", lipgloss.PlaceHorizontal(44, lipgloss.Right, btns), "")
+	return dialog(p.title, 50, strings.Join(rows, "\n"))
+}

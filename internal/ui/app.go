@@ -96,11 +96,13 @@ type Model struct {
 	version   string // versão em execução (ex: v0.2.1; "dev" no go run)
 	newerTag  string // versão mais nova disponível ("" = nenhuma)
 	updatedTo string // versão já instalada nesta sessão (vale ao reabrir)
+
+	sftp map[*session.Session]*sftpView // gerenciador de arquivos de cada aba
 }
 
 func New(cfgPath string, cfg *config.File, v *vault.Vault, version string) Model {
 	zone.NewGlobal()
-	m := Model{cfgPath: cfgPath, cfg: cfg, vault: v, version: version, open: map[string]bool{}, focus: focusGrid, sideSel: 1}
+	m := Model{cfgPath: cfgPath, cfg: cfg, vault: v, version: version, open: map[string]bool{}, sftp: map[*session.Session]*sftpView{}, focus: focusGrid, sideSel: 1}
 	closed := map[string]bool{}
 	for _, f := range cfg.Collapsed {
 		closed[f] = true
@@ -393,6 +395,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case osDetectedMsg:
 		m.onOSDetected(msg)
+
+	case sftpReadyMsg, sftpDoneMsg, sftpTickMsg:
+		cmd = m.onSftpMsg(msg)
 
 	case iconStatusMsg:
 		m.onIconStatus(msg.st)
@@ -687,7 +692,17 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 	if s := m.current(); s != nil {
-		if cmd, ok := m.sessionMouse(s, msg); ok {
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			// clicar no Ssh/Sftp da barra de título troca a vista (só se não for a atual)
+			if v := m.sftpOf(s); v != nil && (!v.on && zone.Get("sess:sftp").InBounds(msg) || v.on && zone.Get("sess:ssh").InBounds(msg)) {
+				return m.toggleSftp(s)
+			}
+		}
+		if v := m.sftpOf(s); v != nil && v.on {
+			if cmd, ok := m.sftpMouse(v, msg); ok {
+				return cmd
+			}
+		} else if cmd, ok := m.sessionMouse(s, msg); ok {
 			return cmd
 		}
 	}

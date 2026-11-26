@@ -87,9 +87,22 @@ func (m *Model) hasSession(name string) bool {
 // sessionHeader é a barra de título da sessão: onde você está, sempre à vista.
 func (m Model) sessionHeader(s *session.Session, cols int) string {
 	bg := lipgloss.NewStyle().Background(cSel)
+	// Ssh | Sftp na ponta direita: clicável, ou alt+s
+	sftpOn := false
+	if v := m.sftpOf(s); v != nil {
+		sftpOn = v.on
+	}
+	seg := func(id, label string, on bool) string {
+		if on {
+			return zone.Mark(id, lipgloss.NewStyle().Background(cAcc).Foreground(cDark).Bold(true).Render(label))
+		}
+		return zone.Mark(id, bg.Foreground(cDim).Render(label))
+	}
+	toggle := seg("sess:ssh", " Ssh ", !sftpOn) + seg("sess:sftp", " Sftp ", sftpOn) + bg.Render(" ")
+	cols -= lipgloss.Width(toggle)
 	h, ok := m.hostByName(s.Name)
 	if !ok {
-		return bg.Foreground(cFg).Bold(true).Width(cols).Render(" " + s.Name)
+		return bg.Foreground(cFg).Bold(true).Width(cols).Render(" "+s.Name) + toggle
 	}
 	mark := lipgloss.NewStyle().Background(cSel).Foreground(cDim).Render(m.markChar(h))
 	if d, ok := distroOf(h); ok && !m.cfg.SimpleIcons {
@@ -128,7 +141,7 @@ func (m Model) sessionHeader(s *session.Session, cols int) string {
 	if w := lipgloss.Width(line); w < cols {
 		line += bg.Render(strings.Repeat(" ", cols-w))
 	}
-	return line
+	return line + toggle
 }
 
 func (m *Model) current() *session.Session {
@@ -158,6 +171,7 @@ func (m *Model) connect(h config.Host) tea.Cmd {
 		return nil
 	}
 	m.sessions = append(m.sessions, s)
+	m.sftp[s] = newSftpView(ctl, h.Target())
 	m.tab = len(m.sessions)
 	m.toast = ""
 	return tea.Batch(listen(s), detectOS(h, ctl, func() bool { done, _ := s.Exited(); return done }))
@@ -183,8 +197,20 @@ func (m *Model) reconnect(i int) tea.Cmd {
 		return nil
 	}
 	m.sessions[i-1] = s
+	nv := newSftpView(ctl, h.Target())
+	if v := m.sftp[old]; v != nil {
+		nv.adopt(v) // transferências paradas, pastas e a vista vêm junto
+		v.close()
+		delete(m.sftp, old)
+	}
+	m.sftp[s] = nv
 	m.toast = ""
-	return tea.Batch(listen(s), detectOS(h, ctl, func() bool { done, _ := s.Exited(); return done }))
+	var sftpCmd tea.Cmd
+	if nv.on { // estava no SFTP: reabre conectado
+		nv.on = false
+		sftpCmd = m.toggleSftp(s)
+	}
+	return tea.Batch(listen(s), detectOS(h, ctl, func() bool { done, _ := s.Exited(); return done }), sftpCmd)
 }
 
 func (m *Model) hostByName(name string) (config.Host, bool) {
@@ -201,6 +227,10 @@ func (m *Model) closeTab(i int) {
 		return
 	}
 	m.sessions[i-1].Close()
+	if v := m.sftp[m.sessions[i-1]]; v != nil {
+		v.close()
+		delete(m.sftp, m.sessions[i-1])
+	}
 	m.sessions = append(m.sessions[:i-1], m.sessions[i:]...)
 	switch {
 	case m.tab == i:
@@ -284,6 +314,12 @@ func (m *Model) sessionKey(k tea.KeyMsg) tea.Cmd {
 	if k.String() == "ctrl+b" {
 		m.tab = 0
 		return nil
+	}
+	if k.String() == "alt+s" {
+		return m.toggleSftp(s)
+	}
+	if v := m.sftpOf(s); v != nil && v.on {
+		return m.sftpKey(v, k)
 	}
 	if done, _ := s.Exited(); done {
 		switch k.String() {
@@ -383,6 +419,10 @@ func (m Model) viewSession() string {
 	s := m.current()
 	cols, rows := m.termSize()
 	done, _ := s.Exited()
+	if v := m.sftpOf(s); v != nil && v.on {
+		body := m.viewSftp(v, cols, rows)
+		return lipgloss.NewStyle().PaddingLeft(1).Render(m.sessionHeader(s, cols) + "\n" + strings.Join(body, "\n"))
+	}
 	lines := s.Lines(!done && m.modal == nil)
 	for len(lines) < rows {
 		lines = append(lines, "")
@@ -476,15 +516,8 @@ func controlPath() (string, error) {
 // digitando senha) e roda osinfo.Command por ele.
 func detectOS(h config.Host, ctl string, stop func() bool) tea.Cmd {
 	return func() tea.Msg {
-		deadline := time.Now().Add(3 * time.Minute)
-		for {
-			if _, err := os.Stat(ctl); err == nil {
-				break
-			}
-			if stop() || time.Now().After(deadline) {
-				return nil
-			}
-			time.Sleep(300 * time.Millisecond)
+		if !waitCtl(ctl, stop) {
+			return nil
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -496,6 +529,20 @@ func detectOS(h config.Host, ctl string, stop func() bool) tea.Cmd {
 			return nil
 		}
 		return osDetectedMsg{h.Name, info}
+	}
+}
+
+// waitCtl espera o socket de controle aparecer; false se desistiu (stop ou 3 min).
+func waitCtl(ctl string, stop func() bool) bool {
+	deadline := time.Now().Add(3 * time.Minute)
+	for {
+		if _, err := os.Stat(ctl); err == nil {
+			return true
+		}
+		if stop() || time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(300 * time.Millisecond)
 	}
 }
 

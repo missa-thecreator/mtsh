@@ -97,6 +97,8 @@ mtsh
 | rodinha, `shift+↑↓`, `shift+PgUp/PgDn` | numa aba de sessão, rola o histórico (digitar volta pro fim) |
 | arrastar com o mouse | numa aba de sessão, seleciona e copia o texto |
 | botão direito (ou do meio), `ctrl+v` | numa aba de sessão, cola |
+| `alt+s` ou clicar em **Sftp** na barra da aba | numa aba de sessão, troca o terminal pelo gerenciador de arquivos (local à esquerda, servidor à direita; usa a mesma conexão, sem logar de novo) |
+| `enter`/`F5`, `F2`, `F7`, `F8` | no SFTP: entra na pasta ou copia pro outro lado, renomeia, nova pasta, apaga (`tab` troca de painel e passa pela lista de transferências, onde `p` pausa ou continua e `x` cancela a destacada; o ‖/▸ e o × de cada linha fazem o mesmo com o mouse; cancelada ou interrompida, a transferência fica na lista com ↻ (ou `r`) pra retomar de onde parou, inclusive depois de reconectar a aba, `ctrl+c` cancela todas, `esc` volta pro terminal) |
 | `1`–`9` | no Início, vai pra aba |
 | `,` | ajustes |
 | `q` | sair |
