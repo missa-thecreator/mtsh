@@ -27,6 +27,7 @@ type focusArea int
 const (
 	focusSide focusArea = iota
 	focusGrid
+	focusTabs // barra de abas (Início e sessões)
 )
 
 const (
@@ -557,10 +558,27 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
+	if m.focus == focusTabs {
+		switch k {
+		case "down", "j", "enter":
+			m.focus = focusSide
+		case "right", "l":
+			// abre a primeira sessão; de lá, ctrl+b volta pro Início
+			if len(m.sessions) > 0 {
+				m.tab, m.focus = 1, focusSide
+			}
+		}
+		return nil
+	}
+
 	if m.focus == focusSide {
 		rows := m.treeRows()
 		switch k {
 		case "up", "k":
+			if m.sideSel == 0 {
+				m.focus = focusTabs // do topo da árvore sobe pra barra de abas
+				return nil
+			}
 			m.sideSel--
 			m.clamp()
 			return m.activateSide(false)

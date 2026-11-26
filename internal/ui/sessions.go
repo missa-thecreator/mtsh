@@ -406,6 +406,10 @@ func (m Model) viewTabLabels() string {
 	// aba ativa em destaque (fundo âmbar); nas outras, o símbolo vem colorido
 	tab := func(i int, mark, label string) string {
 		id := fmt.Sprintf("tab:%d", i)
+		if i == m.tab && m.focus == focusTabs {
+			// com o foco na barra: mesma largura, com as setinhas dos botões
+			return zone.Mark(id, sTabOn.Padding(0, 1).Render("›"+strings.TrimSpace(mark+" "+label)+"‹"))
+		}
 		if i == m.tab {
 			return zone.Mark(id, sTabOn.Render(strings.TrimSpace(mark+" "+label)))
 		}
