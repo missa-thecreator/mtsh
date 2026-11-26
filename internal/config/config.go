@@ -96,6 +96,7 @@ type File struct {
 
 	Folders      []string               `yaml:"folders,omitempty"`
 	FolderStyles map[string]FolderStyle `yaml:"folder_styles,omitempty"` // chave = caminho da pasta
+	Collapsed    []string               `yaml:"collapsed,omitempty"`     // pastas fechadas na barra lateral
 	Hosts        []Host                 `yaml:"hosts"`
 }
 

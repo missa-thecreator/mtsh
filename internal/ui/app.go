@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -97,8 +98,12 @@ type Model struct {
 func New(cfgPath string, cfg *config.File, v *vault.Vault, version string) Model {
 	zone.NewGlobal()
 	m := Model{cfgPath: cfgPath, cfg: cfg, vault: v, version: version, open: map[string]bool{}, focus: focusGrid, sideSel: 1}
+	closed := map[string]bool{}
+	for _, f := range cfg.Collapsed {
+		closed[f] = true
+	}
 	for _, f := range cfg.Folders {
-		m.open[f] = true
+		m.open[f] = !closed[f]
 	}
 	return m
 }
@@ -450,7 +455,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.clamp()
+	m.syncCollapsed()
 	return m, cmd
+}
+
+// syncCollapsed grava quais pastas estão fechadas, pra árvore voltar igual ao
+// reabrir o mtsh. Só salva quando muda.
+func (m *Model) syncCollapsed() {
+	var closed []string
+	for _, f := range m.cfg.Folders {
+		if !m.open[f] {
+			closed = append(closed, f)
+		}
+	}
+	if !slices.Equal(closed, m.cfg.Collapsed) {
+		m.cfg.Collapsed = closed
+		m.persist()
+	}
 }
 
 func (m *Model) updateModal(msg tea.Msg) tea.Cmd {
