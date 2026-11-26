@@ -6,11 +6,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	zone "github.com/lrstanley/bubblezone"
 
 	"mtsh/internal/clipboard"
 	"mtsh/internal/config"
@@ -24,7 +26,21 @@ type importModal struct {
 
 	result []string // resumo depois de importar (a janela vira o resumo)
 	focus  int      // 0 campo do arquivo, 1 Cancelar, 2 Importar
+
+	// navegador: lista a pasta do caminho digitado, filtrada pelo pedaço depois da última "/"
+	dir     string      // pasta lida (já expandida)
+	all     []fileEntry // conteúdo de dir
+	entries []fileEntry // o que aparece (com ".." e o filtro)
+	sel     int         // item destacado; -1 = nenhum
+	off     int         // primeira linha visível
 }
+
+type fileEntry struct {
+	name string
+	dir  bool
+}
+
+const browseRows = 8
 
 func (im *importModal) setFocus(i int) {
 	im.focus = (i%3 + 3) % 3
@@ -39,7 +55,88 @@ func newImportModal() *importModal {
 	im := &importModal{path: newInput("~/Downloads/sessoes.mxtsessions", 46)}
 	im.path.CharLimit = 1024
 	im.path.Focus()
+	im.path.SetValue("~/")
+	im.path.CursorEnd()
+	im.browse()
 	return im
+}
+
+// browse atualiza a lista a partir do caminho digitado.
+func (im *importModal) browse() {
+	v := im.path.Value()
+	i := strings.LastIndex(v, "/")
+	// shortcut: caminho do Windows (C:\...) não é navegado, só importado; dá pra converter com winPath se precisar
+	if i < 0 || winDrive.MatchString(v) {
+		im.dir, im.all, im.entries, im.sel, im.off = "", nil, nil, -1, 0
+		return
+	}
+	dir := config.ExpandHome(v[:i+1])
+	if dir != im.dir {
+		im.dir, im.all = dir, readDir(dir)
+	}
+	prefix := strings.ToLower(v[i+1:])
+	im.entries = nil
+	if prefix == "" && filepath.Clean(dir) != "/" {
+		im.entries = append(im.entries, fileEntry{"..", true})
+	}
+	for _, e := range im.all {
+		if strings.HasPrefix(strings.ToLower(e.name), prefix) {
+			im.entries = append(im.entries, e)
+		}
+	}
+	im.sel, im.off = -1, 0
+}
+
+// readDir lista a pasta com as subpastas primeiro; erro vira lista vazia.
+func readDir(dir string) []fileEntry {
+	des, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	out := make([]fileEntry, 0, len(des))
+	for _, d := range des {
+		isDir := d.IsDir()
+		if d.Type()&os.ModeSymlink != 0 { // link pra pasta também é pasta
+			if st, err := os.Stat(filepath.Join(dir, d.Name())); err == nil {
+				isDir = st.IsDir()
+			}
+		}
+		out = append(out, fileEntry{d.Name(), isDir})
+	}
+	sort.SliceStable(out, func(a, b int) bool { return out[a].dir && !out[b].dir })
+	return out
+}
+
+// moveSel anda o destaque e rola a lista pra ele ficar visível.
+func (im *importModal) moveSel(d int) {
+	im.sel = max(-1, min(len(im.entries)-1, im.sel+d))
+	if im.sel >= 0 && im.sel < im.off {
+		im.off = im.sel
+	}
+	if im.sel >= im.off+browseRows {
+		im.off = im.sel - browseRows + 1
+	}
+}
+
+// open entra na pasta ou importa o arquivo do item i.
+func (im *importModal) open(m *Model, i int) bool {
+	e := im.entries[i]
+	v := im.path.Value()
+	base := v[:strings.LastIndex(v, "/")+1]
+	switch {
+	case e.name == "..":
+		up := filepath.Dir(filepath.Clean(im.dir))
+		im.path.SetValue(strings.TrimSuffix(up, "/") + "/")
+	case e.dir:
+		im.path.SetValue(base + e.name + "/")
+	default:
+		im.path.SetValue(base + e.name)
+		im.path.CursorEnd()
+		return im.submit(m)
+	}
+	im.path.CursorEnd()
+	im.browse()
+	return false
 }
 
 // importPastedMsg traz o texto da área de transferência pro campo do arquivo.
@@ -72,6 +169,7 @@ func (im *importModal) update(m *Model, msg tea.Msg) (tea.Cmd, bool) {
 		im.path.SetValue(strings.TrimSpace(line))
 		im.setFocus(0)
 		im.path.CursorEnd()
+		im.browse()
 		im.err = ""
 		return nil, false
 	}
@@ -79,12 +177,36 @@ func (im *importModal) update(m *Model, msg tea.Msg) (tea.Cmd, bool) {
 	if mm, ok := msg.(tea.MouseMsg); ok && mm.Button == tea.MouseButtonRight && mm.Action == tea.MouseActionPress {
 		return importPaste, false
 	}
+	if mm, ok := msg.(tea.MouseMsg); ok && mm.Action == tea.MouseActionPress &&
+		(mm.Button == tea.MouseButtonWheelUp || mm.Button == tea.MouseButtonWheelDown) {
+		d := 3
+		if mm.Button == tea.MouseButtonWheelUp {
+			d = -3
+		}
+		im.off = max(0, min(len(im.entries)-browseRows, im.off+d))
+		return nil, false
+	}
 	if mm, ok := isLeftClick(msg); ok {
 		switch {
 		case clicked("m:close", mm), clicked("m:cancel", mm):
 			return nil, true
 		case clicked("m:ok", mm):
+			if im.sel >= 0 && !im.entries[im.sel].dir {
+				return nil, im.open(m, im.sel)
+			}
 			return nil, im.submit(m)
+		}
+		for i := im.off; i < min(len(im.entries), im.off+browseRows); i++ {
+			if clicked(fmt.Sprintf("imp:%d", i), mm) {
+				im.err = ""
+				im.setFocus(0)
+				// pasta abre no clique; arquivo destaca no primeiro e importa no segundo
+				if im.entries[i].dir || im.sel == i {
+					return nil, im.open(m, i)
+				}
+				im.sel = i
+				return nil, false
+			}
 		}
 		return nil, false
 	}
@@ -97,11 +219,25 @@ func (im *importModal) update(m *Model, msg tea.Msg) (tea.Cmd, bool) {
 			if im.focus == 1 {
 				return nil, true // Cancelar
 			}
+			if im.sel >= 0 {
+				return nil, im.open(m, im.sel)
+			}
 			return nil, im.submit(m)
-		case "tab", "down":
+		case "down", "up", "pgdown", "pgup":
+			if im.focus == 0 { // no campo, as setas andam pela lista
+				im.moveSel(map[string]int{"down": 1, "up": -1, "pgdown": browseRows, "pgup": -browseRows}[k.String()])
+				return nil, false
+			}
+			if k.String() == "down" {
+				im.setFocus(im.focus + 1)
+			} else if k.String() == "up" {
+				im.setFocus(im.focus - 1)
+			}
+			return nil, false
+		case "tab":
 			im.setFocus(im.focus + 1)
 			return nil, false
-		case "shift+tab", "up":
+		case "shift+tab":
 			im.setFocus(im.focus - 1)
 			return nil, false
 		case "left", "right":
@@ -117,8 +253,12 @@ func (im *importModal) update(m *Model, msg tea.Msg) (tea.Cmd, bool) {
 	if im.focus != 0 {
 		return nil, false // nos botões, as letras não vão pro campo
 	}
+	before := im.path.Value()
 	var cmd tea.Cmd
 	im.path, cmd = im.path.Update(msg)
+	if im.path.Value() != before {
+		im.browse()
+	}
 	return cmd, false
 }
 
@@ -279,14 +419,47 @@ func (im *importModal) view(m *Model) string {
 		sFaint.Render("Servidores com nome já cadastrado ficam de fora."),
 		"",
 		fieldRow("Arquivo", im.focus == 0, fieldBox(im.path.View(), im.path.Width)),
+		im.viewList(),
 		"",
 	}
 	if im.err != "" {
 		rows = append(rows, sErr.Render("  "+im.err))
 	} else {
-		rows = append(rows, sFaint.Render("  ctrl+v ou botão direito cola · tab vai pros botões · enter importar"))
+		rows = append(rows, sFaint.Render("  ↑↓ escolhe · enter abre a pasta ou importa · ctrl+v cola · tab botões"))
 	}
 	btns := button("m:cancel", " Cancelar ", false, im.focus == 1) + "  " + button("m:ok", " Importar ", true, im.focus == 2)
 	rows = append(rows, "", lipgloss.PlaceHorizontal(64, lipgloss.Right, btns), "")
 	return dialog("Importar servidores", 70, strings.Join(rows, "\n"))
+}
+
+// viewList desenha a lista da pasta embaixo do campo, sempre com browseRows linhas.
+func (im *importModal) viewList() string {
+	const indent, w = 13, 48
+	pad := strings.Repeat(" ", indent)
+	lines := make([]string, 0, browseRows)
+	if len(im.entries) == 0 {
+		lines = append(lines, pad+sFaint.Render(" nada aqui"))
+	}
+	for i := im.off; i < min(len(im.entries), im.off+browseRows); i++ {
+		e := im.entries[i]
+		name, st := e.name, sFg
+		if e.dir {
+			name, st = e.name+"/", sAcc
+		}
+		if e.name == ".." {
+			st = sDim
+		}
+		label := " " + name
+		if r := []rune(label); len(r) > w {
+			label = string(r[:w-1]) + "…"
+		}
+		if i == im.sel {
+			st = st.Background(cSel).Bold(true)
+		}
+		lines = append(lines, pad+zone.Mark(fmt.Sprintf("imp:%d", i), st.Width(w).Render(label)))
+	}
+	for len(lines) < browseRows {
+		lines = append(lines, "")
+	}
+	return strings.Join(lines, "\n")
 }
