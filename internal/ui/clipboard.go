@@ -33,14 +33,14 @@ type pastedMsg struct {
 }
 
 // sessionOrigin: canto de cima da área da sessão na tela. A barra lateral
-// ocupa sideW colunas, mais 1 de margem; em cima fica a linha das abas.
-const sessionOriginX, sessionOriginY = sideW + 1, 2 // + barra de título da sessão
+// ocupa sideW() colunas, mais 1 de margem; em cima fica a linha das abas.
+const sessionOriginY = 2 // + barra de título da sessão
 
 // sessionMouse trata o mouse na área da sessão. ok = false deixa o clique pro
 // resto da tela (abas, barra lateral, rodinha).
 func (m *Model) sessionMouse(s *session.Session, msg tea.MouseMsg) (cmd tea.Cmd, ok bool) {
 	cols, rows := m.termSize()
-	x, y := msg.X-sessionOriginX, msg.Y-sessionOriginY
+	x, y := msg.X-(m.sideW()+1), msg.Y-sessionOriginY
 	// a coluna de margem à esquerda conta como a primeira coluna
 	inside := x >= -1 && x < cols && y >= 0 && y < rows
 

@@ -63,7 +63,7 @@ func (m *Model) sshCommand(h config.Host) (c *exec.Cmd, ctl string, err error) {
 // termSize é o espaço da aba de sessão (tudo à direita da barra lateral).
 // A primeira linha da área é a barra de título da sessão; o terminal fica embaixo.
 func (m *Model) termSize() (cols, rows int) {
-	return max(10, m.width-sideW-1), max(3, m.bodyH()-1)
+	return max(10, m.width-m.sideW()-1), max(3, m.bodyH()-1)
 }
 
 // sessionHost é o servidor da aba de sessão aberta ("" no Início).

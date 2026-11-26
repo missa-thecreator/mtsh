@@ -21,8 +21,8 @@ func (m Model) View() string {
 		return ""
 	}
 	// cada região com o seu fundo: painel (abas, lateral, rodapé) e área principal
-	side := paint(m.viewSide(), sideW, cPanel)
-	mainW := m.width - sideW
+	side := paint(m.viewSide(), m.sideW(), cPanel)
+	mainW := m.width - m.sideW()
 	var body string
 	if m.modal != nil {
 		// janela no meio da área principal (ou da tela toda, se não couber)
@@ -59,7 +59,7 @@ func (m Model) viewTabs() string {
 // ---- barra lateral ----
 
 func (m Model) viewSide() string {
-	inner := sideW - 1
+	inner := m.sideW() - 1
 	focused := m.focus == focusSide
 	var b strings.Builder
 
@@ -91,7 +91,7 @@ func (m Model) viewSide() string {
 	b.WriteString(" " + zone.Mark("act:folder", sBtnGhost.Render(" + Pasta ")))
 
 	var border lipgloss.TerminalColor = cLine
-	if focused {
+	if focused || m.resizing {
 		border = cAcc
 	}
 	return lipgloss.NewStyle().
@@ -336,7 +336,7 @@ func (m Model) viewStatus() string {
 		summary = fmt.Sprintf(" aba %d de %d", m.tab, len(m.sessions))
 	}
 	// versão alinhada com o começo da área principal
-	left := sDim.Render(runewidth.FillRight(summary, sideW+2)) + sFaint.Render(m.version)
+	left := sDim.Render(runewidth.FillRight(summary, m.sideW()+2)) + sFaint.Render(m.version)
 	if m.toast != "" {
 		icon, st := "✓ ", sOk
 		if m.toastErr {

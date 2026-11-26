@@ -31,9 +31,10 @@ const (
 )
 
 const (
-	sideW    = 30 // largura da barra lateral (com a borda)
-	cardH    = 6  // altura de um card (com bordas)
-	cardMinW = 30
+	sideDefault = 30 // largura padrão da barra lateral (com a borda)
+	sideMin     = 20
+	cardH       = 6 // altura de um card (com bordas)
+	cardMinW    = 30
 )
 
 type sshDoneMsg struct {
@@ -82,6 +83,7 @@ type Model struct {
 	lastClickAt time.Time
 
 	dragging bool // arrastando o mouse pra selecionar texto numa aba de sessão
+	resizing bool // arrastando a borda da barra lateral
 
 	modal modal        // janela aberta (nil = nenhuma)
 	vault *vault.Vault // senhas salvas
@@ -142,7 +144,17 @@ func (m *Model) cards() []config.Host {
 // ---- layout ----
 
 func (m *Model) bodyH() int { return max(1, m.height-2) }
-func (m *Model) mainW() int { return max(cardMinW, m.width-sideW-3) }
+
+// sideW é a largura da barra lateral (com a borda), escolhida arrastando a borda.
+func (m Model) sideW() int {
+	w := m.cfg.SideWidth
+	if w == 0 {
+		w = sideDefault
+	}
+	return max(sideMin, min(w, m.width-cardMinW-3))
+}
+
+func (m *Model) mainW() int { return max(cardMinW, m.width-m.sideW()-3) }
 func (m *Model) cols() int  { return min(4, max(1, (m.mainW()+1)/(cardMinW+1))) }
 func (m *Model) cardW() int { c := m.cols(); return (m.mainW() - (c - 1)) / c }
 func (m *Model) gridRows() int {
@@ -370,10 +382,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		cols, rows := m.termSize()
-		for _, s := range m.sessions {
-			s.Resize(cols, rows)
-		}
+		m.resizeSessions()
 
 	case sessionOutputMsg:
 		// a tela é redesenhada sozinha; só volta a escutar
@@ -648,7 +657,31 @@ func parentOf(r treeRow) string {
 	return ""
 }
 
+func (m *Model) resizeSessions() {
+	cols, rows := m.termSize()
+	for _, s := range m.sessions {
+		s.Resize(cols, rows)
+	}
+}
+
 func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
+	// arrastar a borda da barra lateral muda a largura dela
+	switch {
+	case m.resizing && msg.Action == tea.MouseActionMotion:
+		if w := max(sideMin, min(msg.X+1, m.width-cardMinW-3)); w != m.sideW() {
+			m.cfg.SideWidth = w
+			m.resizeSessions()
+		}
+		return nil
+	case m.resizing && msg.Action == tea.MouseActionRelease:
+		m.resizing = false
+		m.persist()
+		return nil
+	case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft &&
+		msg.X == m.sideW()-1 && msg.Y > 0 && msg.Y < m.height-1:
+		m.resizing = true
+		return nil
+	}
 	if s := m.current(); s != nil {
 		if cmd, ok := m.sessionMouse(s, msg); ok {
 			return cmd
@@ -664,12 +697,12 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			d = -1
 		}
 		if s := m.current(); s != nil {
-			if msg.X >= sideW {
+			if msg.X >= m.sideW() {
 				m.scrollSession(s, -d*3) // rodinha pra cima (d=-1) sobe 3 linhas
 			}
 			return nil
 		}
-		if msg.X < sideW {
+		if msg.X < m.sideW() {
 			m.sideSel += d
 			m.clamp()
 			return m.activateSide(false)
@@ -697,7 +730,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	}
 	if m.current() != nil {
 		// na aba de sessão só a barra lateral responde ao clique (volta pro Início)
-		if msg.X >= sideW {
+		if msg.X >= m.sideW() {
 			return nil
 		}
 		m.tab = 0
