@@ -96,7 +96,7 @@ type Model struct {
 
 func New(cfgPath string, cfg *config.File, v *vault.Vault, version string) Model {
 	zone.NewGlobal()
-	m := Model{cfgPath: cfgPath, cfg: cfg, vault: v, version: version, open: map[string]bool{}, focus: focusGrid}
+	m := Model{cfgPath: cfgPath, cfg: cfg, vault: v, version: version, open: map[string]bool{}, focus: focusGrid, sideSel: 1}
 	for _, f := range cfg.Folders {
 		m.open[f] = true
 	}
@@ -155,6 +155,8 @@ func (m *Model) clamp() {
 	if m.sideSel >= m.sideOff+tv {
 		m.sideOff = m.sideSel - tv + 1
 	}
+	// lista encolheu (pastas fechadas): desce a rolagem pra não sobrar linha vazia embaixo
+	m.sideOff = min(m.sideOff, max(0, len(rows)-tv))
 
 	n := len(m.cards())
 	m.cardSel = min(max(0, m.cardSel), max(0, n-1))
@@ -165,6 +167,7 @@ func (m *Model) clamp() {
 	if row >= m.gridOff+vis {
 		m.gridOff = row - vis + 1
 	}
+	m.gridOff = min(m.gridOff, max(0, (n+m.cols()-1)/m.cols()-vis))
 }
 
 func (m *Model) say(msg string, isErr bool) { m.toast, m.toastErr = msg, isErr }
@@ -200,6 +203,10 @@ func (m *Model) activateSide(toggle bool) tea.Cmd {
 	r := rows[m.sideSel]
 	m.query = ""
 	switch r.kind {
+	case rowImport:
+		if toggle {
+			m.modal = newImportModal()
+		}
 	case rowAll:
 		m.ctx = ""
 	case rowFolder:
@@ -690,7 +697,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			dbl := again && time.Since(m.lastClickAt) < 400*time.Millisecond
 			m.lastClickID, m.lastClickAt = id, time.Now()
 			r := m.treeRows()[i]
-			return m.activateSide((r.kind == rowFolder && again) || (r.kind == rowHost && dbl))
+			return m.activateSide(r.kind == rowImport || (r.kind == rowFolder && again) || (r.kind == rowHost && dbl))
 		}
 	}
 	for i, h := range m.cards() {
