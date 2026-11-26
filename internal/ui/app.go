@@ -399,6 +399,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sftpReadyMsg, sftpDoneMsg, sftpTickMsg:
 		cmd = m.onSftpMsg(msg)
 
+	case winHomeMsg:
+		m.onWinHome(msg)
+
 	case iconStatusMsg:
 		m.onIconStatus(msg.st)
 

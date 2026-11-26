@@ -45,7 +45,7 @@ const (
 // Vai escrevendo o que fez em out.
 func Install(out io.Writer) error {
 	switch {
-	case isWSL():
+	case IsWSL():
 		return installWSL(out)
 	case runtime.GOOS == "darwin":
 		home, _ := os.UserHomeDir()
@@ -55,7 +55,8 @@ func Install(out io.Writer) error {
 	}
 }
 
-func isWSL() bool {
+// IsWSL diz se roda no WSL (dá pra chamar programas do Windows).
+func IsWSL() bool {
 	if _, err := os.Stat("/proc/sys/fs/binfmt_misc/WSLInterop"); err == nil {
 		return true
 	}
@@ -66,11 +67,11 @@ func isWSL() bool {
 // ---- WSL: a tela é desenhada pelo Windows, então a fonte vai pro Windows ----
 
 func installWSL(out io.Writer) error {
-	local, err := winFolder("LocalApplicationData")
+	local, err := WinFolder("LocalApplicationData")
 	if err != nil {
 		return err
 	}
-	roaming, err := winFolder("ApplicationData")
+	roaming, err := WinFolder("ApplicationData")
 	if err != nil {
 		return err
 	}
@@ -132,7 +133,7 @@ func installWindowsFont(dir, file, family string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	winDest, err := wslpath("-w", dest)
+	winDest, err := WSLPath("-w", dest)
 	if err != nil {
 		return err
 	}
@@ -144,16 +145,18 @@ func installWindowsFont(dir, file, family string, data []byte) error {
 	return nil
 }
 
-func winFolder(name string) (string, error) {
+// WinFolder devolve, no formato do WSL, uma pasta especial do Windows (ex: UserProfile).
+func WinFolder(name string) (string, error) {
 	b, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
 		"[Environment]::GetFolderPath('"+name+"')").Output()
 	if err != nil {
 		return "", fmt.Errorf("não consegui falar com o Windows (powershell.exe): %w", err)
 	}
-	return wslpath("-u", strings.TrimSpace(string(b)))
+	return WSLPath("-u", strings.TrimSpace(string(b)))
 }
 
-func wslpath(flag, p string) (string, error) {
+// WSLPath converte caminhos entre WSL e Windows (flag -u ou -w).
+func WSLPath(flag, p string) (string, error) {
 	b, err := exec.Command("wslpath", flag, p).Output()
 	if err != nil {
 		return "", fmt.Errorf("wslpath %s %s: %w", flag, p, err)
@@ -454,15 +457,15 @@ func (s Status) Ready() bool {
 
 // Check confere a instalação sem alterar nada.
 func Check() Status {
-	if !isWSL() {
+	if !IsWSL() {
 		return checkUnix()
 	}
 
-	local, err := winFolder("LocalApplicationData")
+	local, err := WinFolder("LocalApplicationData")
 	if err != nil {
 		return Status{Err: err}
 	}
-	roaming, err := winFolder("ApplicationData")
+	roaming, err := WinFolder("ApplicationData")
 	if err != nil {
 		return Status{Err: err}
 	}

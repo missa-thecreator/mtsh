@@ -19,6 +19,8 @@ import (
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/pkg/sftp"
 
+	"mtsh/internal/config"
+	"mtsh/internal/fonts"
 	"mtsh/internal/session"
 )
 
@@ -801,6 +803,9 @@ func (m *Model) sftpKey(v *sftpView, k tea.KeyMsg) tea.Cmd {
 	if !v.ready() {
 		return nil
 	}
+	if k.Paste { // arrastar do Explorer pro terminal cola o caminho do arquivo
+		return m.sftpDrop(v, string(k.Runes))
+	}
 	switch key {
 	case "left":
 		v.act = 0
@@ -870,8 +875,150 @@ func (m *Model) sftpKey(v *sftpView, k tea.KeyMsg) tea.Cmd {
 		m.sftpDelete(v)
 	case "ctrl+r":
 		p.load(p.dir)
+	case "w":
+		return m.sftpWinHome(v)
+	case "o":
+		m.sftpExplorer(v)
 	}
 	return nil
+}
+
+// ---- arrastar arquivos pra janela ----
+
+// splitDropped separa os caminhos colados ao soltar arquivos no terminal:
+// separados por espaço ou linha, com aspas quando o nome tem espaço.
+func splitDropped(text string) []string {
+	var out []string
+	var cur strings.Builder
+	quote, has := rune(0), false
+	for _, r := range text {
+		switch {
+		case quote != 0 && r == quote:
+			quote = 0
+		case quote == 0 && (r == '"' || r == '\''):
+			quote, has = r, true
+		case quote == 0 && (r == ' ' || r == '\n' || r == '\r' || r == '\t'):
+			if has {
+				out = append(out, cur.String())
+			}
+			cur.Reset()
+			has = false
+		default:
+			cur.WriteRune(r)
+			has = true
+		}
+	}
+	if has {
+		out = append(out, cur.String())
+	}
+	return out
+}
+
+// sftpDrop envia pro painel Remoto os arquivos (ou pastas) cujos caminhos
+// chegaram colados. Caminho do Windows (C:\...) vira /mnt/c/... no WSL.
+func (m *Model) sftpDrop(v *sftpView, text string) tea.Cmd {
+	type item struct{ sp, dp, name string }
+	var items []item
+	var existing int
+	remote := v.panes[1]
+	for _, p := range splitDropped(text) {
+		sp := config.ExpandHome(winPath(p))
+		if _, err := os.Stat(sp); err != nil {
+			v.say("não achei "+p+" neste computador", true)
+			return nil
+		}
+		name := path.Base(sp)
+		dp := path.Join(remote.dir, name)
+		if _, err := remote.fs.Stat(dp); err == nil {
+			existing++
+		}
+		items = append(items, item{sp, dp, name})
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	run := func() tea.Cmd {
+		var cmds []tea.Cmd
+		for _, it := range items {
+			sp, dp := it.sp, it.dp
+			cmds = append(cmds, v.startJob("↑ enviar "+it.name, dp, 0, func(sf, df fsys, j *job, resume bool) error {
+				return copyTree(sf, sp, df, dp, j, resume)
+			}))
+		}
+		return tea.Batch(cmds...)
+	}
+	if existing > 0 {
+		what := items[0].name + " já existe"
+		if existing > 1 {
+			what = fmt.Sprintf("%d itens já existem", existing)
+		}
+		m.modal = &confirmModal{
+			title: "Substituir", okLabel: "Substituir",
+			text: what + " em\n" + remote.dir + "\nSubstituir?",
+			onOK: func(*Model) tea.Cmd { return run() },
+		}
+		return nil
+	}
+	return run()
+}
+
+// ---- Windows (no WSL) ----
+
+type winHomeMsg struct {
+	v   *sftpView
+	dir string
+	err error
+}
+
+var winHome string // pasta do usuário no Windows, já no formato do WSL (guardada após a 1ª vez)
+
+// sftpWinHome leva o painel Local pra pasta do usuário do Windows (/mnt/c/Users/…).
+func (m *Model) sftpWinHome(v *sftpView) tea.Cmd {
+	if !fonts.IsWSL() {
+		v.say("w só funciona no WSL", true)
+		return nil
+	}
+	v.act = 0
+	if winHome != "" {
+		v.panes[0].load(winHome)
+		return nil
+	}
+	v.say("perguntando ao Windows…", false)
+	return func() tea.Msg { // o powershell demora ~1s: fora da tela
+		dir, err := fonts.WinFolder("UserProfile")
+		return winHomeMsg{v, dir, err}
+	}
+}
+
+func (m *Model) onWinHome(msg winHomeMsg) {
+	if msg.err != nil {
+		msg.v.say(msg.err.Error(), true)
+		return
+	}
+	winHome = msg.dir
+	msg.v.say("", false)
+	msg.v.panes[0].load(winHome)
+	msg.v.act = 0
+}
+
+// sftpExplorer abre a pasta do painel Local no Explorador de Arquivos do Windows.
+func (m *Model) sftpExplorer(v *sftpView) {
+	if !fonts.IsWSL() {
+		v.say("o só funciona no WSL", true)
+		return
+	}
+	dir, err := fonts.WSLPath("-w", v.panes[0].dir)
+	if err != nil {
+		v.say(err.Error(), true)
+		return
+	}
+	cmd := exec.Command("explorer.exe", dir)
+	if err := cmd.Start(); err != nil {
+		v.say("não deu pra abrir o Explorer: "+err.Error(), true)
+		return
+	}
+	go cmd.Wait() // o explorer.exe sai com código 1 mesmo quando abre: não dá pra confiar no resultado
+	v.say("abrindo "+dir+" no Explorer", false)
 }
 
 // sftpMouse trata o mouse na aba quando o SFTP está à vista.
@@ -989,7 +1136,7 @@ func (m Model) viewSftp(v *sftpView, cols, rows int) []string {
 			sFaint.Render("  ·  tab vai pra lista · p pausa/continua · x cancela · ctrl+c cancela tudo")
 	}
 	out = append(out, lipgloss.NewStyle().MaxWidth(cols).Render(status))
-	help := " enter abre/copia · F5 copia · F2 renomeia · F7 nova pasta · F8 apaga · tab troca · esc terminal"
+	help := " enter abre/copia · F5 copia · F2 renomeia · F7 pasta · F8 apaga · w Windows · o Explorer · esc sai"
 	out = append(out, sFaint.MaxWidth(cols).Render(help))
 	return out
 }

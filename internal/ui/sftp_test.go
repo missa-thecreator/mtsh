@@ -222,3 +222,35 @@ func TestSftpResume(t *testing.T) {
 		t.Fatalf("substituir: %q", got)
 	}
 }
+
+func TestSplitDropped(t *testing.T) {
+	got := splitDropped(`"/mnt/c/Users/Ma theus/a b.txt" /mnt/c/x.sql 'C:\Users\M\c d.zip'` + "\r\n/tmp/y")
+	want := []string{"/mnt/c/Users/Ma theus/a b.txt", "/mnt/c/x.sql", `C:\Users\M\c d.zip`, "/tmp/y"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestSftpDrop(t *testing.T) {
+	local, remote := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(local, "um arquivo.txt"), []byte("oi"), 0o644)
+	os.WriteFile(filepath.Join(remote, "um arquivo.txt"), []byte("velho"), 0o644)
+	os.WriteFile(filepath.Join(local, "novo"), nil, 0o644)
+	v := &sftpView{on: true, panes: [2]*pane{{fs: localFS{}, dir: local}, {fs: localFS{}, dir: remote}}}
+	m := &Model{}
+	drop := tea.KeyMsg{Type: tea.KeyRunes, Paste: true, Runes: []rune(`"` + filepath.Join(local, "um arquivo.txt") + `" ` + filepath.Join(local, "novo"))}
+	m.sftpKey(v, drop)
+	if m.modal == nil || len(v.jobs) != 0 {
+		t.Fatal("um já existe: devia perguntar antes de enviar")
+	}
+	m.modal.(*confirmModal).onOK(m)
+	if len(v.jobs) != 2 || v.jobs[0].target != filepath.Join(remote, "um arquivo.txt") || v.jobs[1].target != filepath.Join(remote, "novo") {
+		t.Fatalf("jobs = %d", len(v.jobs))
+	}
+	// caminho que não existe não envia nada
+	v2 := &sftpView{on: true, panes: v.panes}
+	m.sftpKey(v2, tea.KeyMsg{Type: tea.KeyRunes, Paste: true, Runes: []rune("/nao/existe")})
+	if len(v2.jobs) != 0 || !v2.msgErr {
+		t.Fatal("caminho inexistente devia avisar")
+	}
+}
