@@ -563,8 +563,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.askDelete()
 		return nil
 	case "esc":
-		m.query = ""
-		return nil
+		// com filtro de busca, o esc só limpa; sem filtro, pergunta se sai (como o q)
+		if m.query != "" {
+			m.query = ""
+			return nil
+		}
+		return m.askQuit()
 	}
 
 	if m.focus == focusTabs {

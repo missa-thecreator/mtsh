@@ -316,16 +316,16 @@ func (m Model) statusHints() []hint {
 	case m.query != "":
 		return []hint{{"esc", "limpar filtro"}, {"enter", "conectar"}, {"e", "editar"}, {"/", "buscar"}}
 	case m.focus == focusTabs:
-		hs := []hint{{"↓", "menu"}, {"q", "sair"}}
+		hs := []hint{{"↓", "menu"}, {"q/esc", "sair"}}
 		if len(m.sessions) > 0 {
 			hs = append([]hint{{"→", "sessões"}}, hs...)
 		}
 		return hs
 	case m.focus == focusSide:
-		return []hint{{"enter", "abrir"}, {"a", "servidor"}, {"n", "pasta"}, {"/", "buscar"}, {"q", "sair"},
+		return []hint{{"enter", "abrir"}, {"a", "servidor"}, {"n", "pasta"}, {"/", "buscar"}, {"q/esc", "sair"},
 			{"e", "editar pasta"}, {"d", "apagar"}, {"tab", "cards"}}
 	}
-	return []hint{{"enter", "conectar"}, {"a", "novo"}, {"/", "buscar"}, {"q", "sair"}, {"e", "editar"},
+	return []hint{{"enter", "conectar"}, {"a", "novo"}, {"/", "buscar"}, {"q/esc", "sair"}, {"e", "editar"},
 		{"n", "pasta"}, {"t", "tela cheia"}, {"d", "apagar"}, {",", "ajustes"}, {"tab", "pastas"}}
 }
 
