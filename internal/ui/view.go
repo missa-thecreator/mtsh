@@ -97,6 +97,9 @@ func (m Model) treeLine(r treeRow, i, w int, focused bool) string {
 	var text, count string
 	isCtx := m.query == ""
 	switch r.kind {
+	case rowImport:
+		text = "⇩ Importar"
+		isCtx = false
 	case rowAll:
 		text, count = "≡ Todos", fmt.Sprint(len(m.cfg.Hosts))
 		isCtx = isCtx && m.ctx == ""
@@ -186,9 +189,8 @@ func (m Model) emptyState(w int) string {
 	if len(m.cfg.Hosts) == 0 {
 		return lipgloss.NewStyle().Width(min(w, 70)).Render(
 			sBold.Render("Nenhum servidor ainda.") + "\n\n" +
-				sDim.Render("O cadastro pela tela chega no próximo passo. Por enquanto, adicione no arquivo:") + "\n" +
-				sAcc.Render(m.cfgPath) + "\n\n" +
-				sFaint.Render("hosts:\n  - name: meu-servidor\n    folder: Casa\n    host: 192.168.0.10\n    user: root"))
+				sDim.Render("Cadastre um em ") + sAcc.Render("+ Servidor") +
+				sDim.Render(" ou traga os do electerm em ") + sAcc.Render("⇩ Importar") + sDim.Render(", na barra lateral."))
 	}
 	return sDim.Render("Essa pasta está vazia.")
 }
