@@ -275,6 +275,7 @@ type pane struct {
 	items    []sfItem
 	sel, off int
 	err      string
+	back     []string // pastas por onde passou: o esc volta por elas
 }
 
 // load lê a pasta; se é a mesma de antes, mantém o item destacado.
@@ -337,11 +338,40 @@ func (p *pane) cur() (sfItem, bool) {
 	return sfItem{}, false
 }
 
+// goTo navega pra dir lembrando de onde saiu (se a pasta abriu).
+func (p *pane) goTo(dir string) {
+	prev := p.dir
+	p.load(dir)
+	if p.dir == dir && prev != dir && prev != "" {
+		p.back = append(p.back, prev)
+	}
+}
+
 func (p *pane) up() {
-	from := path.Base(p.dir)
-	p.load(path.Dir(p.dir))
-	for i, it := range p.items { // volta com a pasta de onde saiu destacada
-		if it.name == from {
+	from := p.dir
+	p.goTo(path.Dir(p.dir))
+	p.highlightChild(from)
+}
+
+// goBack volta pra pasta anterior; false se já está na primeira.
+func (p *pane) goBack() bool {
+	if len(p.back) == 0 {
+		return false
+	}
+	from := p.dir
+	p.load(p.back[len(p.back)-1])
+	p.back = p.back[:len(p.back)-1]
+	p.highlightChild(from)
+	return true
+}
+
+// highlightChild destaca a pasta de onde saiu, se ela está na pasta atual.
+func (p *pane) highlightChild(from string) {
+	if path.Dir(from) != p.dir {
+		return
+	}
+	for i, it := range p.items {
+		if it.name == path.Base(from) {
 			p.sel = i
 		}
 	}
@@ -748,7 +778,7 @@ func (m *Model) sftpOpen(v *sftpView) tea.Cmd {
 	case it.name == "..":
 		p.up()
 	case it.dir:
-		p.load(path.Join(p.dir, it.name))
+		p.goTo(path.Join(p.dir, it.name))
 	default:
 		return m.sftpTransfer(v)
 	}
@@ -793,6 +823,10 @@ func (v *sftpView) cancelJob(i int) {
 func (m *Model) sftpKey(v *sftpView, k tea.KeyMsg) tea.Cmd {
 	key := k.String()
 	if key == "esc" {
+		// volta pelas pastas por onde passou; na primeira, sai pro terminal
+		if v.act < 2 && v.panes[v.act] != nil && v.panes[v.act].goBack() {
+			return nil
+		}
 		v.on = false
 		return nil
 	}
@@ -980,7 +1014,7 @@ func (m *Model) sftpWinHome(v *sftpView) tea.Cmd {
 	}
 	v.act = 0
 	if winHome != "" {
-		v.panes[0].load(winHome)
+		v.panes[0].goTo(winHome)
 		return nil
 	}
 	v.say("perguntando ao Windows…", false)
@@ -997,7 +1031,7 @@ func (m *Model) onWinHome(msg winHomeMsg) {
 	}
 	winHome = msg.dir
 	msg.v.say("", false)
-	msg.v.panes[0].load(winHome)
+	msg.v.panes[0].goTo(winHome)
 	msg.v.act = 0
 }
 
@@ -1136,7 +1170,7 @@ func (m Model) viewSftp(v *sftpView, cols, rows int) []string {
 			sFaint.Render("  ·  tab vai pra lista · p pausa/continua · x cancela · ctrl+c cancela tudo")
 	}
 	out = append(out, lipgloss.NewStyle().MaxWidth(cols).Render(status))
-	help := " enter abre/copia · F5 copia · F2 renomeia · F7 pasta · F8 apaga · w Windows · o Explorer · esc sai"
+	help := " enter abre/copia · F5 copia · F2 renomeia · F7 pasta · F8 apaga · w Windows · o Explorer · esc volta"
 	out = append(out, sFaint.MaxWidth(cols).Render(help))
 	return out
 }

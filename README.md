@@ -99,7 +99,7 @@ mtsh
 | botão direito (ou do meio), `ctrl+v` | numa aba de sessão, cola |
 | `alt+s` ou clicar em **Sftp** na barra da aba | numa aba de sessão, troca o terminal pelo gerenciador de arquivos (local à esquerda, servidor à direita; usa a mesma conexão, sem logar de novo) |
 | `w`, `o` | no SFTP (no WSL): leva o painel Local pra sua pasta do Windows (`/mnt/c/Users/…`); abre a pasta do painel Local no Explorador de Arquivos; arrastar arquivos do Explorer pra janela (ou colar o caminho) envia pro painel Remoto |
-| `enter`/`F5`, `F2`, `F7`, `F8` | no SFTP: entra na pasta ou copia pro outro lado, renomeia, nova pasta, apaga (`tab` troca de painel e passa pela lista de transferências, onde `p` pausa ou continua e `x` cancela a destacada; o ‖/▸ e o × de cada linha fazem o mesmo com o mouse; cancelada ou interrompida, a transferência fica na lista com ↻ (ou `r`) pra retomar de onde parou, inclusive depois de reconectar a aba, `ctrl+c` cancela todas, `esc` volta pro terminal) |
+| `enter`/`F5`, `F2`, `F7`, `F8` | no SFTP: entra na pasta ou copia pro outro lado, renomeia, nova pasta, apaga (`tab` troca de painel e passa pela lista de transferências, onde `p` pausa ou continua e `x` cancela a destacada; o ‖/▸ e o × de cada linha fazem o mesmo com o mouse; cancelada ou interrompida, a transferência fica na lista com ↻ (ou `r`) pra retomar de onde parou, inclusive depois de reconectar a aba, `ctrl+c` cancela todas, `esc` volta pra pasta anterior e, na primeira, pro terminal) |
 | `1`–`9` | no Início, vai pra aba |
 | `,` | ajustes |
 | `q` | sair |

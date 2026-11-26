@@ -10,6 +10,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/pkg/sftp"
+
+	"mtsh/internal/config"
 )
 
 // pipeSftp liga um cliente a um servidor SFTP local (que mexe no disco de verdade).
@@ -252,5 +254,48 @@ func TestSftpDrop(t *testing.T) {
 	m.sftpKey(v2, tea.KeyMsg{Type: tea.KeyRunes, Paste: true, Runes: []rune("/nao/existe")})
 	if len(v2.jobs) != 0 || !v2.msgErr {
 		t.Fatal("caminho inexistente devia avisar")
+	}
+}
+
+func TestSftpEscVolta(t *testing.T) {
+	d := t.TempDir()
+	os.MkdirAll(filepath.Join(d, "a", "b"), 0o755)
+	os.MkdirAll(filepath.Join(d, "z"), 0o755)
+	p := &pane{fs: localFS{}}
+	p.load(d)
+	v := &sftpView{on: true, panes: [2]*pane{p, {fs: localFS{}, dir: d}}}
+	m := &Model{cfg: &config.File{}, width: 120, height: 40}
+	key := func(t tea.KeyType) { m.sftpKey(v, tea.KeyMsg{Type: t}) }
+	enterOn := func(name string) {
+		for i, it := range p.items {
+			if it.name == name {
+				p.sel = i
+			}
+		}
+		key(tea.KeyEnter)
+	}
+	enterOn("a")
+	enterOn("b")
+	if p.dir != filepath.Join(d, "a", "b") {
+		t.Fatalf("dir = %s", p.dir)
+	}
+	key(tea.KeyEsc)
+	if p.dir != filepath.Join(d, "a") || p.items[p.sel].name != "b" || !v.on {
+		t.Fatalf("esc 1: dir=%s sel=%s on=%v", p.dir, p.items[p.sel].name, v.on)
+	}
+	key(tea.KeyEsc)
+	if p.dir != d || p.items[p.sel].name != "a" || !v.on {
+		t.Fatalf("esc 2: dir=%s on=%v", p.dir, v.on)
+	}
+	key(tea.KeyEsc) // já na primeira pasta: sai pro terminal
+	if v.on || p.dir != d {
+		t.Fatalf("esc 3: devia sair do SFTP (on=%v dir=%s)", v.on, p.dir)
+	}
+	// subir com backspace também entra no caminho: esc desce de volta
+	v.on = true
+	key(tea.KeyBackspace)
+	key(tea.KeyEsc)
+	if p.dir != d || !v.on {
+		t.Fatalf("depois de subir, esc devia voltar pra %s (dir=%s)", d, p.dir)
 	}
 }
