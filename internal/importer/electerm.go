@@ -14,6 +14,7 @@ type Item struct {
 	Host     config.Host
 	Password string
 	Key      string // conteúdo da chave privada
+	KeyPath  string // caminho de uma chave privada em arquivo (MobaXterm), pra ler na importação
 }
 
 type electermBookmark struct {

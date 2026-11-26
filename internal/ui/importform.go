@@ -17,14 +17,26 @@ import (
 	"mtsh/internal/importer"
 )
 
-// importModal pede o arquivo exportado pelo electerm e importa os servidores.
+// importModal pede o arquivo exportado pelo electerm ou pelo MobaXterm e importa os servidores.
 type importModal struct {
 	path textinput.Model
 	err  string
+
+	result []string // resumo depois de importar (a janela vira o resumo)
+	focus  int      // 0 campo do arquivo, 1 Cancelar, 2 Importar
+}
+
+func (im *importModal) setFocus(i int) {
+	im.focus = (i%3 + 3) % 3
+	if im.focus == 0 {
+		im.path.Focus()
+	} else {
+		im.path.Blur()
+	}
 }
 
 func newImportModal() *importModal {
-	im := &importModal{path: newInput("~/Downloads/electerm-all-data.json", 50)}
+	im := &importModal{path: newInput("~/Downloads/sessoes.mxtsessions", 46)}
 	im.path.CharLimit = 1024
 	im.path.Focus()
 	return im
@@ -42,6 +54,15 @@ func importPaste() tea.Msg {
 }
 
 func (im *importModal) update(m *Model, msg tea.Msg) (tea.Cmd, bool) {
+	if im.result != nil {
+		if _, ok := isLeftClick(msg); ok {
+			return nil, true
+		}
+		if _, ok := msg.(tea.KeyMsg); ok {
+			return nil, true
+		}
+		return nil, false
+	}
 	if pm, ok := msg.(importPastedMsg); ok {
 		if pm.err != nil {
 			im.err = "Não deu pra ler a área de transferência: " + pm.err.Error()
@@ -49,6 +70,7 @@ func (im *importModal) update(m *Model, msg tea.Msg) (tea.Cmd, bool) {
 		}
 		line, _, _ := strings.Cut(strings.TrimSpace(pm.text), "\n")
 		im.path.SetValue(strings.TrimSpace(line))
+		im.setFocus(0)
 		im.path.CursorEnd()
 		im.err = ""
 		return nil, false
@@ -72,11 +94,28 @@ func (im *importModal) update(m *Model, msg tea.Msg) (tea.Cmd, bool) {
 		case "esc":
 			return nil, true
 		case "enter":
+			if im.focus == 1 {
+				return nil, true // Cancelar
+			}
 			return nil, im.submit(m)
+		case "tab", "down":
+			im.setFocus(im.focus + 1)
+			return nil, false
+		case "shift+tab", "up":
+			im.setFocus(im.focus - 1)
+			return nil, false
+		case "left", "right":
+			if im.focus != 0 { // nos botões, troca entre Cancelar e Importar
+				im.setFocus(3 - im.focus)
+				return nil, false
+			}
 		case "ctrl+v":
 			// o ctrl+v do textinput não alcança a área de transferência do Windows no WSL
 			return importPaste, false
 		}
+	}
+	if im.focus != 0 {
+		return nil, false // nos botões, as letras não vão pro campo
 	}
 	var cmd tea.Cmd
 	im.path, cmd = im.path.Update(msg)
@@ -95,25 +134,72 @@ func (im *importModal) submit(m *Model) bool {
 		im.err = "Não deu pra ler o arquivo: " + err.Error()
 		return false
 	}
-	items, skipped, err := importer.Electerm(data)
+	items, skipped, source, err := importer.Detect(data)
 	if err != nil {
 		im.err = err.Error()
 		return false
 	}
+	missingKeys, ppkKeys := loadKeyFiles(items)
 	added, existing, err := m.importItems(items)
 	if err != nil {
 		im.err = err.Error()
 		return false
 	}
-	msg := fmt.Sprintf("%d servidores importados", added)
-	if existing > 0 {
-		msg += fmt.Sprintf(" · %d já existiam", existing)
+	m.say(fmt.Sprintf("%s importado%s do %s", plural(added, "servidor", "servidores"), pluralS(added), source), false)
+	im.result = []string{sOk.Render("✓ " + plural(added, "servidor importado", "servidores importados") + " do " + source)}
+	note := func(n int, text string) {
+		if n > 0 {
+			im.result = append(im.result, text)
+		}
 	}
-	if skipped > 0 {
-		msg += fmt.Sprintf(" · %d ignorados (não são SSH)", skipped)
+	note(existing, sDim.Render("· "+plural(existing, "já existia (mesmo nome)", "já existiam (mesmo nome)")))
+	note(skipped, sDim.Render("· "+plural(skipped, "ignorado: não é SSH (RDP, VNC…)", "ignorados: não são SSH (RDP, VNC…)")))
+	note(ppkKeys, sAcc.Render("! "+plural(ppkKeys, "chave .ppk do PuTTY", "chaves .ppk do PuTTY")+": converta com o puttygen"))
+	note(missingKeys, sAcc.Render("! "+plural(missingKeys, "chave não encontrada: o servidor ficou", "chaves não encontradas: os servidores ficaram")+" como automático"))
+	if source == "MobaXterm" && added > 0 {
+		im.result = append(im.result, sDim.Render("· senhas não vêm no arquivo: o ssh pergunta ao conectar"))
 	}
-	m.say(msg, false)
-	return true
+	return false // continua aberta, mostrando o resumo
+}
+
+// plural escreve "1 servidor" ou "3 servidores".
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}
+
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// loadKeyFiles lê as chaves que o arquivo importado só referencia pelo caminho
+// (MobaXterm grava o caminho do Windows; no WSL ele vira /mnt/c/...). Quem não
+// tiver a chave legível fica como "automático".
+func loadKeyFiles(items []importer.Item) (missing, ppk int) {
+	for i := range items {
+		it := &items[i]
+		if it.Key != "" || it.KeyPath == "" {
+			continue
+		}
+		data, err := os.ReadFile(config.ExpandHome(winPath(it.KeyPath)))
+		switch {
+		case err != nil:
+			missing++
+		case strings.HasPrefix(strings.TrimSpace(string(data)), "PuTTY-User-Key-File"):
+			ppk++ // formato do PuTTY: o ssh não entende
+		case strings.Contains(string(data), "PRIVATE KEY"):
+			it.Key = string(data)
+			it.Host.Auth = config.AuthKey
+		default:
+			missing++
+		}
+	}
+	return missing, ppk
 }
 
 // importItems junta os servidores importados na config. Quem tem o mesmo nome
@@ -181,19 +267,26 @@ func winPath(p string) string {
 }
 
 func (im *importModal) view(m *Model) string {
+	if im.result != nil {
+		rows := append([]string{}, im.result...)
+		rows = append(rows, "", lipgloss.PlaceHorizontal(64, lipgloss.Right, button("m:ok", " Fechar ", true, true)), "")
+		return dialog("Importação concluída", 70, strings.Join(rows, "\n"))
+	}
 	rows := []string{
-		sFg.Render("Traz pastas, servidores e senhas do JSON exportado pelo electerm."),
+		sFg.Render("Traz pastas e servidores de:"),
+		sDim.Render("  · MobaXterm: o .mxtsessions exportado ou o MobaXterm.ini"),
+		sDim.Render("  · electerm: o JSON \"all data\", com as senhas"),
 		sFaint.Render("Servidores com nome já cadastrado ficam de fora."),
 		"",
-		fieldRow("Arquivo", true, im.path.View()),
+		fieldRow("Arquivo", im.focus == 0, fieldBox(im.path.View(), im.path.Width)),
 		"",
 	}
 	if im.err != "" {
 		rows = append(rows, sErr.Render("  "+im.err))
 	} else {
-		rows = append(rows, sFaint.Render("  ctrl+v ou botão direito cola o caminho · enter importar"))
+		rows = append(rows, sFaint.Render("  ctrl+v ou botão direito cola · tab vai pros botões · enter importar"))
 	}
-	btns := button("m:cancel", " Cancelar ", false, false) + "  " + button("m:ok", " Importar ", true, false)
+	btns := button("m:cancel", " Cancelar ", false, im.focus == 1) + "  " + button("m:ok", " Importar ", true, im.focus == 2)
 	rows = append(rows, "", lipgloss.PlaceHorizontal(64, lipgloss.Right, btns), "")
-	return dialog("Importar do electerm", 70, strings.Join(rows, "\n"))
+	return dialog("Importar servidores", 70, strings.Join(rows, "\n"))
 }

@@ -221,7 +221,7 @@ func (m Model) emptyState(w int) string {
 		return lipgloss.NewStyle().Width(min(w, 70)).Render(
 			sBold.Render("Nenhum servidor ainda.") + "\n\n" +
 				sDim.Render("Cadastre um em ") + sAcc.Render("+ Servidor") +
-				sDim.Render(" ou traga os do electerm em ") + sAcc.Render("⇩ Importar") + sDim.Render(", na barra lateral."))
+				sDim.Render(" ou traga os do MobaXterm ou do electerm em ") + sAcc.Render("⇩ Importar") + sDim.Render(", na barra lateral."))
 	}
 	return sDim.Render("Essa pasta está vazia.")
 }
