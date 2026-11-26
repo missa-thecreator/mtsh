@@ -329,7 +329,8 @@ func (m Model) viewStatus() string {
 	if m.current() != nil {
 		summary = fmt.Sprintf(" aba %d de %d", m.tab, len(m.sessions))
 	}
-	left := sDim.Render(summary)
+	// versão alinhada com o começo da área principal
+	left := sDim.Render(runewidth.FillRight(summary, sideW+2)) + sFaint.Render(m.version)
 	if m.toast != "" {
 		icon, st := "✓ ", sOk
 		if m.toastErr {
