@@ -290,7 +290,7 @@ func (m Model) viewStatus() string {
 	var keys string
 	switch {
 	case m.current() != nil:
-		keys = "ctrl+b Início · arrastar copia · botão direito cola · rodinha ou shift+↑↓ rola"
+		keys = "ctrl+b Início · esc fechar · arrastar copia · botão direito cola · rodinha ou shift+↑↓ rola"
 	case m.modal != nil:
 		keys = "tab próximo · enter confirmar · esc fechar"
 	case m.searching:

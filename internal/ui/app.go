@@ -144,6 +144,8 @@ func (m *Model) clamp() {
 	if m.sideSel >= m.sideOff+tv {
 		m.sideOff = m.sideSel - tv + 1
 	}
+	// lista encolheu (pastas fechadas): desce a rolagem pra não sobrar linha vazia embaixo
+	m.sideOff = min(m.sideOff, max(0, len(rows)-tv))
 
 	n := len(m.cards())
 	m.cardSel = min(max(0, m.cardSel), max(0, n-1))
@@ -154,6 +156,7 @@ func (m *Model) clamp() {
 	if row >= m.gridOff+vis {
 		m.gridOff = row - vis + 1
 	}
+	m.gridOff = min(m.gridOff, max(0, (n+m.cols()-1)/m.cols()-vis))
 }
 
 func (m *Model) say(msg string, isErr bool) { m.toast, m.toastErr = msg, isErr }

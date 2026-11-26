@@ -199,6 +199,18 @@ func (m *Model) askQuit() tea.Cmd {
 	return nil
 }
 
+// askCloseTab confirma antes de fechar a aba (e a conexão) de s.
+func (m *Model) askCloseTab(s *session.Session) {
+	m.modal = &confirmModal{
+		title: "Fechar aba", okLabel: "Fechar", focusOK: true,
+		text: "Fechar a sessão em " + s.Name + "?\nA conexão é encerrada.",
+		onOK: func(m *Model) tea.Cmd {
+			m.closeTab(m.indexOf(s)) // índice de agora: outra aba pode ter fechado nesse meio-tempo
+			return nil
+		},
+	}
+}
+
 // sessionKey trata o teclado numa aba de sessão.
 func (m *Model) sessionKey(k tea.KeyMsg) tea.Cmd {
 	s := m.current()
@@ -218,6 +230,10 @@ func (m *Model) sessionKey(k tea.KeyMsg) tea.Cmd {
 	// rolagem pelo teclado (só fora da tela cheia, onde as teclas são do programa)
 	if !s.AltScreen() {
 		switch k.String() {
+		case "esc":
+			// na tela cheia (vim, less, htop) o esc é do programa; no shell, pergunta se fecha
+			m.askCloseTab(s)
+			return nil
 		case "shift+up":
 			s.ScrollBy(1)
 			return nil
