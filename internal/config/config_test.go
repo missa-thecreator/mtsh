@@ -49,3 +49,58 @@ func TestSaveRefusesToOverwriteOtherWindow(t *testing.T) {
 		t.Fatalf("salvar de novo na mesma janela falhou: %v", err)
 	}
 }
+
+// Renomear "Prod" leva junto subpastas, servidores e estilos dele, e não toca
+// em "Produção", que só começa com as mesmas letras.
+func TestRenameFolderOnlyMovesThatFolder(t *testing.T) {
+	f := &File{
+		Folders: []string{"Prod", "Prod/Web", "Produção"},
+		FolderStyles: map[string]FolderStyle{
+			"Prod/Web": {Color: "azul"}, "Produção": {Color: "verde"},
+		},
+		Hosts: []Host{
+			{Name: "a", Folder: "Prod"}, {Name: "b", Folder: "Prod/Web"}, {Name: "c", Folder: "Produção"},
+		},
+	}
+	f.RenameFolder("Prod", "Clientes/Prod2")
+
+	if want := []string{"Clientes", "Clientes/Prod2", "Clientes/Prod2/Web", "Produção"}; !slices.Equal(f.Folders, want) {
+		t.Fatalf("pastas: %q, esperava %q", f.Folders, want)
+	}
+	folderOf := map[string]string{}
+	for _, h := range f.Hosts {
+		folderOf[h.Name] = h.Folder
+	}
+	if folderOf["a"] != "Clientes/Prod2" || folderOf["b"] != "Clientes/Prod2/Web" || folderOf["c"] != "Produção" {
+		t.Fatalf("servidores: %v", folderOf)
+	}
+	if f.Style("Clientes/Prod2/Web").Color != "azul" || f.Style("Produção").Color != "verde" || len(f.FolderStyles) != 2 {
+		t.Fatalf("estilos: %v", f.FolderStyles)
+	}
+
+	// apagar "Clientes/Prod2" leva as subpastas e os estilos delas, e só elas
+	f.DeleteFolder("Clientes/Prod2")
+	if want := []string{"Clientes", "Produção"}; !slices.Equal(f.Folders, want) {
+		t.Fatalf("depois de apagar: %q", f.Folders)
+	}
+	if len(f.FolderStyles) != 1 {
+		t.Fatalf("estilos depois de apagar: %v", f.FolderStyles)
+	}
+}
+
+// Normalize cria as pastas-pai que faltam (de servidores e de subpastas),
+// tira "/" das pontas e descarta estilo de pasta que não existe mais.
+func TestNormalize(t *testing.T) {
+	f := &File{
+		Folders:      []string{"x/y/"},
+		FolderStyles: map[string]FolderStyle{"sumiu": {Icon: "📁"}},
+		Hosts:        []Host{{Name: "b", Folder: "/a/b/"}, {Name: "a", Folder: "a/b"}},
+	}
+	f.Normalize()
+	if want := []string{"a", "a/b", "x", "x/y"}; !slices.Equal(f.Folders, want) {
+		t.Fatalf("pastas: %q", f.Folders)
+	}
+	if f.Hosts[0].Name != "a" || f.Hosts[1].Folder != "a/b" || len(f.FolderStyles) != 0 {
+		t.Fatalf("hosts=%v estilos=%v", f.Hosts, f.FolderStyles)
+	}
+}
