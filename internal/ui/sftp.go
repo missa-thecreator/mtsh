@@ -282,6 +282,7 @@ type sfItem struct {
 	name string
 	dir  bool
 	size int64
+	mod  time.Time // data de modificação
 }
 
 type pane struct {
@@ -310,7 +311,7 @@ func (p *pane) load(dir string) {
 	}
 	p.dir, p.items, p.sel, p.off = dir, nil, 0, 0
 	if dir != "/" {
-		p.items = append(p.items, sfItem{"..", true, 0})
+		p.items = append(p.items, sfItem{name: "..", dir: true})
 	}
 	var list []sfItem
 	for _, e := range ents {
@@ -320,7 +321,7 @@ func (p *pane) load(dir string) {
 				isDir = st.IsDir()
 			}
 		}
-		list = append(list, sfItem{e.Name(), isDir, e.Size()})
+		list = append(list, sfItem{e.Name(), isDir, e.Size(), e.ModTime()})
 	}
 	sort.Slice(list, func(a, b int) bool {
 		if list[a].dir != list[b].dir {
@@ -1133,6 +1134,16 @@ func (m *Model) sftpMouse(v *sftpView, msg tea.MouseMsg) (tea.Cmd, bool) {
 
 // ---- desenho ----
 
+// modDate mostra a data como o ls: com hora se é deste ano, com o ano se é
+// mais antiga. Sempre 11 caracteres, pra coluna ficar alinhada.
+func modDate(t, now time.Time) string {
+	t = t.Local()
+	if t.Year() == now.Year() {
+		return t.Format("02/01 15:04")
+	}
+	return fmt.Sprintf("%11s", t.Format("02/01/2006"))
+}
+
 func humanSize(n int64) string {
 	const unit = 1024
 	if n < unit {
@@ -1302,6 +1313,10 @@ func (m Model) viewItem(it sfItem, w int, sel, active bool) string {
 		name, st = it.name+"/", sAcc
 	default:
 		size = humanSize(it.size)
+	}
+	// coluna da direita: tamanho e, se couber, a data (alinhada, pastas também)
+	if it.name != ".." && w >= 40 && !it.mod.IsZero() {
+		size = fmt.Sprintf("%9s  %s", size, modDate(it.mod, time.Now()))
 	}
 	room := w - 2 - len(size) - 1
 	if r := []rune(name); len(r) > room && room > 1 {
