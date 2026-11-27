@@ -82,7 +82,13 @@ type Model struct {
 	lastClickID string
 	lastClickAt time.Time
 
+	mouseFrag bool // no meio de um evento de mouse que chegou partido (ver mouseJunk)
+
 	dragging bool // arrastando o mouse pra selecionar texto numa aba de sessão
+	dragX    int  // onde o mouse está no arraste (coluna/linha da sessão)
+	dragY    int
+	autoRoll bool // rolando sozinho com o mouse parado fora da aba (ver dragRollMsg)
+	rollN    int  // tiques seguidos dessa rolagem (ela acelera com o tempo)
 	resizing bool // arrastando a borda da barra lateral
 
 	modal modal        // janela aberta (nil = nenhuma)
@@ -380,6 +386,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// só aparece com MTSH_DEBUG=arquivo.log
 		log.Printf("mouse: x=%d y=%d botão=%v ação=%v", mm.X, mm.Y, mm.Button, mm.Action)
 	}
+	if k, ok := msg.(tea.KeyMsg); ok && m.mouseJunk(k) {
+		return m, nil
+	}
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -392,6 +401,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionExitMsg:
 		m.onSessionExit(msg.s)
+
+	case dragRollMsg:
+		m.autoRoll = false
+		if msg.s == m.current() {
+			cmd = m.dragRoll(msg.s)
+		}
 
 	case osDetectedMsg:
 		m.onOSDetected(msg)

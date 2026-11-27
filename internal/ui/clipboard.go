@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -16,9 +17,10 @@ import (
 //
 // Como o mtsh usa o mouse (abas, cards, rodinha), o terminal de fora não
 // seleciona mais texto. Então, na aba de sessão:
-//   - arrastar com o botão esquerdo marca o texto e copia ao soltar;
-//   - botão direito (ou do meio) cola o que está na área de transferência;
-//     com texto marcado, ele só desmarca (como no Windows Terminal);
+//   - arrastar com o botão esquerdo só marca o texto;
+//   - botão direito (ou do meio) com texto marcado copia e desmarca; sem
+//     nada marcado, cola o que está na área de transferência (como no
+//     Windows Terminal);
 //   - ctrl+v / ctrl+shift+v do terminal continuam colando (ver sessionKey).
 
 type copiedMsg struct {
@@ -46,25 +48,19 @@ func (m *Model) sessionMouse(s *session.Session, msg tea.MouseMsg) (cmd tea.Cmd,
 
 	switch {
 	case m.dragging && msg.Action == tea.MouseActionMotion:
-		// arrastou pra fora da aba: rola o histórico pra continuar marcando
-		if !s.AltScreen() {
-			switch {
-			case y < 0:
-				s.ScrollBy(1)
-			case y >= rows:
-				s.ScrollBy(-1)
-			}
-		}
+		m.dragX, m.dragY = x, y
 		s.ExtendSelection(s.PointAt(x, y))
-		return nil, true
+		if m.autoRoll {
+			return nil, true // o tique já está rolando
+		}
+		return m.dragRoll(s), true
 
 	case m.dragging && msg.Action == tea.MouseActionRelease:
-		m.dragging = false
+		m.dragging = false // o tique de rolagem para sozinho
 		if !s.HasSelection() {
 			s.ClearSelection() // foi só um clique
-			return nil, true
 		}
-		return copyCmd(s.SelectionText()), true
+		return nil, true // marcado; copia no botão direito
 
 	case !inside || msg.Action != tea.MouseActionPress:
 		return nil, false
@@ -75,11 +71,11 @@ func (m *Model) sessionMouse(s *session.Session, msg tea.MouseMsg) (cmd tea.Cmd,
 		return nil, true
 
 	case msg.Button == tea.MouseButtonRight, msg.Button == tea.MouseButtonMiddle:
-		// como no Windows Terminal: com texto marcado, o clique só desmarca (o
-		// texto já foi copiado ao soltar); sem nada marcado, cola
+		// como no Windows Terminal: com texto marcado, copia e desmarca; sem nada marcado, cola
 		if s.HasSelection() {
+			text := s.SelectionText()
 			s.ClearSelection()
-			return nil, true
+			return copyCmd(text), true
 		}
 		if done, _ := s.Exited(); done {
 			return nil, true
@@ -87,6 +83,31 @@ func (m *Model) sessionMouse(s *session.Session, msg tea.MouseMsg) (cmd tea.Cmd,
 		return pasteCmd(s), true
 	}
 	return nil, false
+}
+
+// dragRollMsg é o tique que rola a aba enquanto o mouse fica parado fora dela
+// (acima ou abaixo) no meio de um arraste.
+type dragRollMsg struct{ s *session.Session }
+
+// dragRoll rola na direção em que o mouse saiu da aba e agenda o próximo
+// tique. Para quando o arraste acaba ou o mouse volta pra dentro. Começa com
+// 1 linha por tique (60/s, dá pra marcar com precisão) e ganha mais 1 a cada
+// ¼ de segundo, até 20 por tique.
+func (m *Model) dragRoll(s *session.Session) tea.Cmd {
+	_, rows := m.termSize()
+	if !m.dragging || s.AltScreen() || m.dragY >= 0 && m.dragY < rows {
+		m.rollN = 0
+		return nil
+	}
+	n := min(1+m.rollN/15, 20)
+	if m.dragY >= rows {
+		n = -n
+	}
+	s.ScrollBy(n)
+	s.ExtendSelection(s.PointAt(m.dragX, m.dragY))
+	m.autoRoll = true
+	m.rollN++
+	return tea.Tick(16*time.Millisecond, func(time.Time) tea.Msg { return dragRollMsg{s} })
 }
 
 func copyCmd(text string) tea.Cmd {
