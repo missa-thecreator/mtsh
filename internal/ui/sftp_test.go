@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/pkg/sftp"
 
 	"mtsh/internal/config"
@@ -309,5 +310,31 @@ func TestSftpEscVolta(t *testing.T) {
 	key(tea.KeyEsc)
 	if p.dir != d || !v.on {
 		t.Fatalf("depois de subir, esc devia voltar pra %s (dir=%s)", d, p.dir)
+	}
+}
+
+// A data aparece com hora se é deste ano e com o ano se é mais antiga; some
+// no ".." e em painel estreito.
+func TestSftpModDate(t *testing.T) {
+	now := time.Date(2026, 11, 27, 10, 0, 0, 0, time.Local)
+	if got := modDate(time.Date(2026, 3, 5, 9, 7, 0, 0, time.Local), now); got != "05/03 09:07" {
+		t.Errorf("deste ano: %q", got)
+	}
+	if got := modDate(time.Date(2025, 12, 9, 8, 42, 0, 0, time.Local), now); got != " 09/12/2025" {
+		t.Errorf("ano passado: %q", got)
+	}
+	m := Model{}
+	it := sfItem{name: "dump.sql", size: 22, mod: time.Now()}
+	if got := m.viewItem(it, 60, false, false); !strings.Contains(got, time.Now().Format("02/01 15:04")) || !strings.Contains(got, "22 B") {
+		t.Errorf("sem data ou tamanho: %q", got)
+	}
+	if got := m.viewItem(it, 30, false, false); strings.Contains(got, "/") {
+		t.Errorf("painel estreito mostrou a data: %q", got)
+	}
+	if got := m.viewItem(sfItem{name: "..", dir: true, mod: time.Now()}, 60, false, false); strings.Contains(got, ":") {
+		t.Errorf(`".." mostrou data: %q`, got)
+	}
+	if w := lipgloss.Width(m.viewItem(it, 60, false, false)); w != 60 {
+		t.Errorf("largura da linha %d, esperava 60", w)
 	}
 }
