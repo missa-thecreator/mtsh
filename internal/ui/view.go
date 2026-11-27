@@ -313,7 +313,7 @@ func (m Model) statusHints() []hint {
 		if v := m.sftpOf(m.current()); v != nil && v.on {
 			return []hint{{"ctrl+b", "Início"}, {"alt+s", "Ssh"}, {"esc", "volta"}, {"arrastar do Explorer", "envia"}}
 		}
-		return []hint{{"ctrl+b", "Início"}, {"alt+s", "Sftp"}, {"esc", "fechar aba"}, {"arrastar", "copia"}, {"botão direito", "cola"}, {"rodinha", "rola"}}
+		return []hint{{"ctrl+b", "Início"}, {"alt+s", "Sftp"}, {"esc", "fechar aba"}, {"arrastar", "marca"}, {"botão direito", "copia/cola"}, {"rodinha", "rola"}}
 	case m.searching:
 		return []hint{{"enter", "ok"}, {"esc", "limpar"}, {"#tag", "busca por tag"}}
 	case m.query != "":

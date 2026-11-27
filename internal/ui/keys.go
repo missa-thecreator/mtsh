@@ -1,8 +1,45 @@
 package ui
 
 import (
+	"regexp"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// Pedaços de evento de mouse ("\x1b[<32;61;43M") que viram teclas.
+//
+// O Bubble Tea v1 lê a entrada em blocos e, se um bloco termina no meio de um
+// evento de mouse (comum ao arrastar, que manda muitos), ele não espera o resto:
+// entrega o começo como alt+[ e o resto como texto digitado. Sem filtro, isso
+// ia parar no servidor ("32;61;43M" no shell, erro de sintaxe no mysql).
+var (
+	mouseTail = regexp.MustCompile(`^<?[0-9;]*[Mm]?$`)                       // resto, logo depois do alt+[
+	mouseLone = regexp.MustCompile(`^\[<[0-9;]+[Mm]?$|^[0-9]+;[0-9;]+[Mm]$`) // resto sozinho (quebra logo depois do esc, ou do alt+[ já descartado)
+)
+
+// mouseJunk diz se a tecla é pedaço de um evento de mouse partido (e deve ser
+// ignorada). Um alt+[ de verdade também é ignorado: quase ninguém usa, e não
+// dá pra saber na hora se vem um pedaço depois.
+func (m *Model) mouseJunk(k tea.KeyMsg) bool {
+	frag := m.mouseFrag
+	m.mouseFrag = false
+	if k.Type != tea.KeyRunes || k.Paste {
+		return false
+	}
+	s := string(k.Runes)
+	switch {
+	case k.Alt && s == "[":
+		m.mouseFrag = true
+		return true
+	case k.Alt:
+		return false
+	case frag && mouseTail.MatchString(s):
+		// o resto pode vir em mais de um pedaço; acaba no M (ou m, ao soltar)
+		m.mouseFrag = s[len(s)-1] != 'M' && s[len(s)-1] != 'm'
+		return true
+	}
+	return mouseLone.MatchString(s)
+}
 
 // encodeKey traduz uma tecla do Bubble Tea pros bytes que um terminal
 // mandaria pro servidor.
