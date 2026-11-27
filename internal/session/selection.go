@@ -171,7 +171,7 @@ func (s *Session) Paste(text string) {
 	}
 	text = strings.ReplaceAll(text, "\r\n", "\r")
 	text = strings.ReplaceAll(text, "\n", "\r")
-	if s.term.Mode()&vt10x.ModeBracketedPaste != 0 {
+	if s.mode()&vt10x.ModeBracketedPaste != 0 {
 		// um fim de colagem no meio do texto encerraria a colagem antes da hora
 		text = strings.ReplaceAll(text, "\x1b[201~", "")
 		text = "\x1b[200~" + text + "\x1b[201~"

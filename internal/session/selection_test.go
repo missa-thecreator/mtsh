@@ -90,7 +90,7 @@ func TestColarComBracketedPaste(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	waitFor(t, func() bool { return s.term.Mode()&vt10x.ModeBracketedPaste != 0 })
+	waitFor(t, func() bool { return s.mode()&vt10x.ModeBracketedPaste != 0 })
 	time.Sleep(300 * time.Millisecond) // tempo do stty raw
 
 	s.Paste("a\nb")

@@ -136,7 +136,15 @@ func (s *Session) Write(b []byte) {
 }
 
 // AppCursor diz se o programa remoto pediu setas no modo "aplicação" (vim, less…).
-func (s *Session) AppCursor() bool { return s.term.Mode()&vt10x.ModeAppCursor != 0 }
+func (s *Session) AppCursor() bool { return s.mode()&vt10x.ModeAppCursor != 0 }
+
+// mode lê os modos do terminal com a trava: a leitura do ssh (readLoop) muda
+// eles ao mesmo tempo, em outra goroutine.
+func (s *Session) mode() vt10x.ModeFlag {
+	s.term.Lock()
+	defer s.term.Unlock()
+	return s.term.Mode()
+}
 
 // Resize ajusta o PTY e o emulador ao tamanho da aba.
 func (s *Session) Resize(cols, rows int) {
@@ -187,7 +195,7 @@ func (s *Session) pushed() int {
 
 // AltScreen diz se o programa remoto está na tela alternativa (vim, htop,
 // less…). Nela não há histórico: a rodinha vira setas pro programa.
-func (s *Session) AltScreen() bool { return s.term.Mode()&vt10x.ModeAltScreen != 0 }
+func (s *Session) AltScreen() bool { return s.mode()&vt10x.ModeAltScreen != 0 }
 
 // ScrollBy rola o histórico: n > 0 sobe, n < 0 desce.
 func (s *Session) ScrollBy(n int) {
