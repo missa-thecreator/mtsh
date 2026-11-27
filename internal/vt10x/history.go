@@ -14,7 +14,8 @@ func (t *State) pushHistory(ls []line) {
 		t.history = append(t.history, append(line(nil), l...))
 	}
 	if over := len(t.history) - HistoryMax; over > 0 {
-		t.history = append([]line(nil), t.history[over:]...)
+		// sem copiar: o append realoca de vez em quando e solta o começo antigo
+		t.history = t.history[over:]
 	}
 }
 
