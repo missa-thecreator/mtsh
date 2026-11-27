@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -509,7 +510,25 @@ func controlPath() (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
+	if err := privateDir(dir); err != nil {
+		return "", err
+	}
 	return filepath.Join(dir, fmt.Sprintf("%d-%d", os.Getpid(), ctlSeq.Add(1))), nil
+}
+
+// privateDir confere que dir é uma pasta (não um link) só deste usuário. O
+// nome em /tmp é previsível: se outra pessoa da máquina criasse a pasta
+// antes, poderia trocar os sockets e receber as conexões (SFTP) da sessão.
+func privateDir(dir string) error {
+	st, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	if !st.IsDir() || !ok || int(sys.Uid) != os.Getuid() || st.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("a pasta %s não é só sua (dono ou permissão errados); apague-a e tente de novo", dir)
+	}
+	return nil
 }
 
 // detectOS espera o socket de controle aparecer (o login pode demorar, ex:
@@ -522,7 +541,7 @@ func detectOS(h config.Host, ctl string, stop func() bool) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		out, _ := exec.CommandContext(ctx, "ssh", "-S", ctl, "-o", "ControlMaster=no", "-o", "BatchMode=yes",
-			"-T", h.Target(), osinfo.Command).Output()
+			"-T", "--", h.Target(), osinfo.Command).Output()
 		info, ok := osinfo.Parse(string(out))
 		if !ok {
 			log.Printf("detecção de sistema em %s: saída não reconhecida: %q", h.Name, out)

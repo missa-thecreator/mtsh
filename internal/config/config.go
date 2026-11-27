@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -74,7 +75,8 @@ func (h Host) SSHArgs() []string {
 	if h.AuthType() == AuthPassword {
 		args = append(args, "-o", "PreferredAuthentications=password,keyboard-interactive")
 	}
-	return append(args, h.Target())
+	// "--": o alvo nunca vira opção do ssh (um host "-oProxyCommand=…" executaria comandos)
+	return append(args, "--", h.Target())
 }
 
 // InFolder diz se o host está na pasta p ou em alguma subpasta dela.
@@ -99,6 +101,19 @@ type File struct {
 	Collapsed    []string               `yaml:"collapsed,omitempty"`     // pastas fechadas na barra lateral
 	SideWidth    int                    `yaml:"side_width,omitempty"`    // largura da barra lateral (0 = padrão)
 	Hosts        []Host                 `yaml:"hosts"`
+
+	seen time.Time // data de modificação do arquivo quando foi lido/gravado (ver Save)
+}
+
+// ErrChanged: o arquivo foi alterado por fora (outra janela do mtsh) depois de lido.
+var ErrChanged = errors.New("a configuração foi alterada em outra janela do mtsh")
+
+func modTime(path string) time.Time {
+	st, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return st.ModTime()
 }
 
 // Style devolve o ícone e a cor da pasta p.
@@ -187,10 +202,19 @@ func Load(path string) (*File, error) {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	f.Normalize()
+	f.seen = modTime(path)
 	return &f, nil
 }
 
+// Save grava a config. Se o arquivo mudou desde que foi lido (outra janela do
+// mtsh salvou), devolve ErrChanged sem gravar: regravar o que está na memória
+// apagaria o que a outra janela fez.
+// shortcut: duas janelas salvando no mesmo instante ainda podem passar pela
+// conferência juntas; trocar por trava de arquivo se isso aparecer.
 func (f *File) Save(path string) error {
+	if !modTime(path).Equal(f.seen) {
+		return ErrChanged
+	}
 	f.Normalize()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
@@ -203,7 +227,11 @@ func (f *File) Save(path string) error {
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	f.seen = modTime(path)
+	return nil
 }
 
 // Normalize garante que toda pasta usada por um host (e seus pais) exista

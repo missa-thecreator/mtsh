@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -350,6 +351,7 @@ func (m *Model) importItems(items []importer.Item) (added, existing int, err err
 		have[h.Name] = true
 	}
 	keysDir := config.KeysDir(m.cfgPath)
+	batch := map[string]bool{} // arquivos de chave já escolhidos nesta importação
 	var fresh []importer.Item
 	for _, it := range items {
 		if have[it.Host.Name] {
@@ -360,7 +362,8 @@ func (m *Model) importItems(items []importer.Item) (added, existing int, err err
 			if err := os.MkdirAll(keysDir, 0o700); err != nil {
 				return 0, 0, err
 			}
-			dest := filepath.Join(keysDir, strings.ReplaceAll(it.Host.Name, "/", "-"))
+			dest := m.keyFile(it.Host.Name, "", batch)
+			batch[dest] = true
 			data := strings.TrimSpace(strings.ReplaceAll(it.Key, "\r\n", "\n")) + "\n"
 			if err := os.WriteFile(dest, []byte(data), 0o600); err != nil {
 				return 0, 0, fmt.Errorf("não deu pra salvar a chave de %s: %w", it.Host.Name, err)
@@ -374,6 +377,9 @@ func (m *Model) importItems(items []importer.Item) (added, existing int, err err
 	}
 	if err := m.cfg.Save(m.cfgPath); err != nil {
 		m.cfg.Hosts = m.cfg.Hosts[:len(m.cfg.Hosts)-len(fresh)]
+		if errors.Is(err, config.ErrChanged) {
+			err = m.reloadCfg()
+		}
 		return 0, 0, fmt.Errorf("erro ao salvar: %w", err)
 	}
 	for _, it := range fresh {

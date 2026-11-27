@@ -108,15 +108,22 @@ type Model struct {
 
 func New(cfgPath string, cfg *config.File, v *vault.Vault, version string) Model {
 	zone.NewGlobal()
-	m := Model{cfgPath: cfgPath, cfg: cfg, vault: v, version: version, open: map[string]bool{}, sftp: map[*session.Session]*sftpView{}, focus: focusGrid, sideSel: 1}
+	m := Model{cfgPath: cfgPath, cfg: cfg, vault: v, version: version, sftp: map[*session.Session]*sftpView{}, focus: focusGrid, sideSel: 1}
+	m.open = openFolders(cfg)
+	return m
+}
+
+// openFolders diz quais pastas da árvore estão abertas (as que não estão em Collapsed).
+func openFolders(cfg *config.File) map[string]bool {
 	closed := map[string]bool{}
 	for _, f := range cfg.Collapsed {
 		closed[f] = true
 	}
+	open := map[string]bool{}
 	for _, f := range cfg.Folders {
-		m.open[f] = !closed[f]
+		open[f] = !closed[f]
 	}
-	return m
+	return open
 }
 
 func (m Model) Init() tea.Cmd { return tea.Batch(checkIcons, checkUpdate(m.version)) }
@@ -257,11 +264,29 @@ func (m *Model) activateSide(toggle bool) tea.Cmd {
 
 // persist grava a config; em caso de erro mostra no rodapé e devolve false.
 func (m *Model) persist() bool {
-	if err := m.cfg.Save(m.cfgPath); err != nil {
+	err := m.cfg.Save(m.cfgPath)
+	if errors.Is(err, config.ErrChanged) {
+		err = m.reloadCfg()
+	}
+	if err != nil {
 		m.say("erro ao salvar: "+err.Error(), true)
 		return false
 	}
 	return true
+}
+
+// reloadCfg troca a config da memória pela do disco, quando outra janela do
+// mtsh salvou antes. A alteração que esta janela tentou salvar se perde, e o
+// erro devolvido avisa pra refazer.
+func (m *Model) reloadCfg() error {
+	fresh, err := config.Load(m.cfgPath)
+	if err != nil {
+		return fmt.Errorf("%w, e não deu pra recarregar: %w", config.ErrChanged, err)
+	}
+	*m.cfg = *fresh
+	m.open = openFolders(m.cfg)
+	m.clamp()
+	return fmt.Errorf("%w; recarreguei, refaça a última alteração", config.ErrChanged)
 }
 
 func (m *Model) selectCard(name string) {

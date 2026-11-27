@@ -425,6 +425,26 @@ func (h *hostModal) keyBox(focused bool) string {
 
 // ---- gravação (no Model, porque mexe na config, nas chaves e nas senhas) ----
 
+// keyFile escolhe onde salvar a chave do servidor name: keys/<nome>, com "/"
+// virando "-". Se esse arquivo já é a chave de outro servidor (ex: "web/api" e
+// "web-api"), usa keys/<nome>-2, -3… em vez de sobrescrever. editing é o
+// servidor sendo editado (pode reusar o próprio arquivo) e batch, os arquivos
+// já escolhidos numa importação que ainda não estão na config.
+func (m *Model) keyFile(name, editing string, batch map[string]bool) string {
+	taken := map[string]bool{}
+	for _, h := range m.cfg.Hosts {
+		if h.Name != editing && h.Key != "" {
+			taken[config.ExpandHome(h.Key)] = true
+		}
+	}
+	base := filepath.Join(config.KeysDir(m.cfgPath), strings.ReplaceAll(name, "/", "-"))
+	p := base
+	for n := 2; taken[p] || batch[p]; n++ {
+		p = fmt.Sprintf("%s-%d", base, n)
+	}
+	return p
+}
+
 func (m *Model) saveHost(h *hostModal, host config.Host, savePass bool) error {
 	keysDir := config.KeysDir(m.cfgPath)
 	managed := func(p string) bool {
@@ -437,7 +457,7 @@ func (m *Model) saveHost(h *hostModal, host config.Host, savePass bool) error {
 
 	// chave
 	if host.Auth == config.AuthKey {
-		dest := filepath.Join(keysDir, host.Name)
+		dest := m.keyFile(host.Name, oldName, nil)
 		switch {
 		case !h.keepKey:
 			if err := os.MkdirAll(keysDir, 0o700); err != nil {

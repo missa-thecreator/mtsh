@@ -70,22 +70,22 @@ else
 	pkg_url="$(printf '%s\n' "$urls" | grep "_${os}_${arch}\.tar\.gz$" | head -n1)"
 	sums_url="$(printf '%s\n' "$urls" | grep '/checksums\.txt$' | head -n1)"
 	[ -n "$pkg_url" ] || die "a versão publicada não tem pacote pra $os/$arch"
+	# sem checksum não dá pra saber se o download veio inteiro (o mtsh --atualizar também recusa)
+	[ -n "$sums_url" ] || die "a versão publicada não tem checksums.txt; não dá pra conferir o download"
 
 	pkg="$tmp/$(basename "$pkg_url")"
 	say "→ baixando $(basename "$pkg_url")"
 	curl -fsSL -o "$pkg" "$pkg_url" || die "falha ao baixar $pkg_url"
 
-	if [ -n "$sums_url" ]; then
-		curl -fsSL -o "$tmp/checksums.txt" "$sums_url" || die "falha ao baixar checksums.txt"
-		expected="$(grep " $(basename "$pkg")\$" "$tmp/checksums.txt" | cut -d' ' -f1)"
-		if command -v sha256sum >/dev/null 2>&1; then
-			actual="$(sha256sum "$pkg" | cut -d' ' -f1)"
-		else
-			actual="$(shasum -a 256 "$pkg" | cut -d' ' -f1)"
-		fi
-		[ -n "$expected" ] && [ "$expected" = "$actual" ] || die "checksum não confere; o download pode estar corrompido"
-		say "✓ checksum confere"
+	curl -fsSL -o "$tmp/checksums.txt" "$sums_url" || die "falha ao baixar checksums.txt"
+	expected="$(grep " $(basename "$pkg")\$" "$tmp/checksums.txt" | cut -d' ' -f1)"
+	if command -v sha256sum >/dev/null 2>&1; then
+		actual="$(sha256sum "$pkg" | cut -d' ' -f1)"
+	else
+		actual="$(shasum -a 256 "$pkg" | cut -d' ' -f1)"
 	fi
+	[ -n "$expected" ] && [ "$expected" = "$actual" ] || die "checksum não confere; o download pode estar corrompido"
+	say "✓ checksum confere"
 fi
 
 # ---- instalar ----
