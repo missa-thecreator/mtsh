@@ -185,10 +185,15 @@ func TestSftpResume(t *testing.T) {
 	os.MkdirAll(filepath.Join(local, "d"), 0o755)
 	os.WriteFile(filepath.Join(local, "d", "inteiro"), []byte("pronto"), 0o644)
 	os.WriteFile(filepath.Join(local, "d", "grande"), []byte(data), 0o644)
-	// como se a cópia anterior tivesse caído: um inteiro, o outro pela metade
+	os.WriteFile(filepath.Join(local, "d", "velho"), []byte("versão nova do arquivo"), 0o644)
+	os.WriteFile(filepath.Join(local, "d", "igual"), []byte("conteúdo novo"), 0o644)
+	// como se a cópia anterior tivesse caído: um inteiro, o outro pela metade.
+	// "velho" e "igual" já estavam lá antes (versões antigas) e a cópia não chegou neles.
 	os.MkdirAll(filepath.Join(remote, "d"), 0o755)
 	os.WriteFile(filepath.Join(remote, "d", "inteiro"), []byte("pronto"), 0o644)
 	os.WriteFile(filepath.Join(remote, "d", "grande"), []byte(data[:1_234_567]), 0o644)
+	os.WriteFile(filepath.Join(remote, "d", "velho"), []byte("antigo"), 0o644)
+	os.WriteFile(filepath.Join(remote, "d", "igual"), []byte("conteúdo old"), 0o644) // mesmo tamanho
 
 	for _, dir := range []struct {
 		name     string
@@ -202,13 +207,20 @@ func TestSftpResume(t *testing.T) {
 			os.MkdirAll(dir.dp, 0o755)
 			os.WriteFile(filepath.Join(dir.dp, "grande"), []byte(data[:777_777]), 0o644)
 		}
-		j := &job{}
+		// o que a cópia anterior registrou: "inteiro" terminou, parou em "grande"
+		j := &job{finished: map[string]bool{filepath.Join(dir.dp, "inteiro"): true}, partial: filepath.Join(dir.dp, "grande")}
 		if err := copyTree(dir.src, dir.sp, dir.dst, dir.dp, j, true); err != nil {
 			t.Fatalf("%s: %v", dir.name, err)
 		}
 		got, _ := os.ReadFile(filepath.Join(dir.dp, "grande"))
 		if string(got) != data {
 			t.Fatalf("%s: arquivo retomado diferente (%d de %d bytes)", dir.name, len(got), len(data))
+		}
+		for _, f := range []string{"velho", "igual"} {
+			want, _ := os.ReadFile(filepath.Join(dir.sp, f))
+			if got, _ := os.ReadFile(filepath.Join(dir.dp, f)); string(got) != string(want) {
+				t.Fatalf("%s: %s ficou %q, esperava %q", dir.name, f, got, want)
+			}
 		}
 		if j.done.Load() != j.total.Load() {
 			t.Fatalf("%s: progresso %d/%d", dir.name, j.done.Load(), j.total.Load())

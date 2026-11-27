@@ -522,7 +522,7 @@ func detectOS(h config.Host, ctl string, stop func() bool) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		out, _ := exec.CommandContext(ctx, "ssh", "-S", ctl, "-o", "ControlMaster=no", "-o", "BatchMode=yes",
-			"-T", h.Target(), osinfo.Command).Output()
+			"-T", "--", h.Target(), osinfo.Command).Output()
 		info, ok := osinfo.Parse(string(out))
 		if !ok {
 			log.Printf("detecção de sistema em %s: saída não reconhecida: %q", h.Name, out)

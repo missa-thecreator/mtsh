@@ -49,11 +49,17 @@ func (v *Vault) Get(name string) (string, error) {
 }
 
 func (v *Vault) Set(name, secret string) error {
+	if err := v.reload(); err != nil {
+		return err
+	}
 	v.entries[name] = secret
 	return v.save()
 }
 
 func (v *Vault) Delete(name string) error {
+	if err := v.reload(); err != nil {
+		return err
+	}
 	if !v.Has(name) {
 		return nil
 	}
@@ -63,6 +69,9 @@ func (v *Vault) Delete(name string) error {
 
 // Rename move a senha de um nome de servidor para outro.
 func (v *Vault) Rename(from, to string) error {
+	if err := v.reload(); err != nil {
+		return err
+	}
 	p, ok := v.entries[from]
 	if !ok || from == to {
 		return nil
@@ -70,6 +79,17 @@ func (v *Vault) Rename(from, to string) error {
 	delete(v.entries, from)
 	v.entries[to] = p
 	return v.save()
+}
+
+// reload relê o arquivo antes de uma mudança: outra janela do mtsh pode ter
+// salvo senhas depois que este abriu, e gravar o mapa antigo as apagaria.
+func (v *Vault) reload() error {
+	fresh, err := Open(v.path)
+	if err != nil {
+		return err
+	}
+	v.entries = fresh.entries
+	return nil
 }
 
 func (v *Vault) save() error {

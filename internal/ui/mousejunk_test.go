@@ -17,7 +17,7 @@ func TestMouseJunk(t *testing.T) {
 		{runes("[", true), runes("<", false), runes("32;61;43M", false)}, // "\x1b[<" | "32;61;43M"
 		{runes("[", true), runes("<32;", false), runes("61;43M", false)}, // "\x1b[<32;" | "61;43M"
 		{runes("[", true), runes("<32;61;4", false), runes("3M", false)}, // "\x1b[<32;61;4" | "3M"
-		{runes("[<32;61;43m", false)},                                   // "\x1b" | "[<32;61;43m" (o esc passa)
+		{runes("[<32;61;43m", false)},                                    // "\x1b" | "[<32;61;43m" (o esc passa)
 	} {
 		m := &Model{}
 		for _, k := range keys {

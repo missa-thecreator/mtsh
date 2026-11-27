@@ -136,6 +136,12 @@ type job struct {
 	from   int
 	do     func(src, dst fsys, j *job, resume bool) error
 	failed string // "" = rodando; senão o motivo, e ela fica na lista esperando ↻ ou ×
+
+	// pra retomar (↻) sem confiar só no tamanho: arquivos do destino que esta
+	// cópia já gravou inteiros, e o que ela estava gravando quando parou.
+	// Só a goroutine da cópia mexe neles (uma retomada só começa depois que a anterior acabou).
+	finished map[string]bool
+	partial  string
 }
 
 // wait segura a cópia enquanto está pausada; erro se foi cancelada.
@@ -182,20 +188,22 @@ func (c *countW) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// copyFile copia um arquivo. Com resume, um destino menor que a origem é
-// tratado como cópia interrompida e continua do tamanho dele; do mesmo
-// tamanho, já chegou inteiro.
+// copyFile copia um arquivo. Com resume (↻), o que esta cópia já gravou
+// inteiro é pulado e o arquivo em que ela parou continua do tamanho que tem.
+// O resto é copiado do zero: um arquivo que já estava no destino antes (versão
+// antiga, ao substituir uma pasta) não é pedaço desta cópia, mesmo sendo menor.
 func copyFile(src fsys, sp string, dst fsys, dp string, fi os.FileInfo, j *job, resume bool) error {
 	var off int64
 	if resume {
-		if st, err := dst.Stat(dp); err == nil && !st.IsDir() && st.Size() <= fi.Size() {
+		if j.finished[dp] {
+			j.done.Add(fi.Size())
+			return nil
+		}
+		if st, err := dst.Stat(dp); err == nil && dp == j.partial && !st.IsDir() && st.Size() <= fi.Size() {
 			off = st.Size()
-			if off == fi.Size() {
-				j.done.Add(off)
-				return dst.Chmod(dp, fi.Mode().Perm())
-			}
 		}
 	}
+	j.partial = dp
 	in, err := src.Open(sp)
 	if err != nil {
 		return err
@@ -232,7 +240,14 @@ func copyFile(src fsys, sp string, dst fsys, dp string, fi os.FileInfo, j *job, 
 	if err != nil {
 		return err
 	}
-	return dst.Chmod(dp, fi.Mode().Perm())
+	if err := dst.Chmod(dp, fi.Mode().Perm()); err != nil {
+		return err
+	}
+	if j.finished == nil {
+		j.finished = map[string]bool{}
+	}
+	j.finished[dp] = true
+	return nil
 }
 
 // copyTree copia o arquivo ou a pasta sp (de src) pra dp (em dst).
@@ -461,7 +476,7 @@ func sftpConnect(v *sftpView, stop func() bool) tea.Cmd {
 		if !waitCtl(ctl, stop) {
 			return sftpReadyMsg{v: v, err: errors.New("a sessão ainda não conectou")}
 		}
-		cmd := exec.Command("ssh", "-S", ctl, "-o", "ControlMaster=no", "-o", "BatchMode=yes", "-T", "-s", target, "sftp")
+		cmd := exec.Command("ssh", "-S", ctl, "-o", "ControlMaster=no", "-o", "BatchMode=yes", "-T", "-s", "--", target, "sftp")
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		w, err := cmd.StdinPipe()

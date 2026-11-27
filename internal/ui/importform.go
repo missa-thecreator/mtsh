@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -374,6 +375,9 @@ func (m *Model) importItems(items []importer.Item) (added, existing int, err err
 	}
 	if err := m.cfg.Save(m.cfgPath); err != nil {
 		m.cfg.Hosts = m.cfg.Hosts[:len(m.cfg.Hosts)-len(fresh)]
+		if errors.Is(err, config.ErrChanged) {
+			err = m.reloadCfg()
+		}
 		return 0, 0, fmt.Errorf("erro ao salvar: %w", err)
 	}
 	for _, it := range fresh {
