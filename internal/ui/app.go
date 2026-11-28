@@ -18,6 +18,7 @@ import (
 
 	"mtsh/internal/config"
 	"mtsh/internal/fonts"
+	"mtsh/internal/kube"
 	"mtsh/internal/session"
 	"mtsh/internal/vault"
 )
@@ -84,12 +85,13 @@ type Model struct {
 
 	mouseFrag bool // no meio de um evento de mouse que chegou partido (ver mouseJunk)
 
-	dragging bool // arrastando o mouse pra selecionar texto numa aba de sessão
-	dragX    int  // onde o mouse está no arraste (coluna/linha da sessão)
-	dragY    int
-	autoRoll bool // rolando sozinho com o mouse parado fora da aba (ver dragRollMsg)
-	rollN    int  // tiques seguidos dessa rolagem (ela acelera com o tempo)
-	resizing bool // arrastando a borda da barra lateral
+	dragging   bool // arrastando o mouse pra selecionar texto numa aba de sessão
+	dragX      int  // onde o mouse está no arraste (coluna/linha da sessão)
+	dragY      int
+	autoRoll   bool // rolando sozinho com o mouse parado fora da aba (ver dragRollMsg)
+	rollN      int  // tiques seguidos dessa rolagem (ela acelera com o tempo)
+	resizing   bool // arrastando a borda da barra lateral
+	dbResizing bool // arrastando a borda da lista de tabelas (aba de banco)
 
 	modal modal        // janela aberta (nil = nenhuma)
 	vault *vault.Vault // senhas salvas
@@ -106,11 +108,21 @@ type Model struct {
 	sftp   map[*session.Session]*sftpView // gerenciador de arquivos de cada aba
 	dbTabs []*dbView                      // abas de banco (ficam depois das de servidor)
 	dbMode bool                           // área principal mostrando os bancos (linha Bancos do menu)
+
+	kubeMode   bool                              // área principal mostrando os clusters (linha Clusters do menu)
+	kubeLoaded bool                              // já leu o kubeconfig
+	kubeCtxs   []kube.Context                    // clusters do kubeconfig
+	kubeErr    string                            // erro ao ler o kubeconfig (ou kubectl ausente)
+	kubeVis    map[*session.Session]*kubeView    // visualização (alt+v) da aba de terminal de cada cluster
+	kubeSess   map[*session.Session]*kubeSession // abas de terminal que são shell/logs de pod
 }
+
+// hostMode: a área principal mostra os servidores (nem Bancos nem Clusters).
+func (m *Model) hostMode() bool { return !m.dbMode && !m.kubeMode }
 
 func New(cfgPath string, cfg *config.File, v *vault.Vault, version string) Model {
 	zone.NewGlobal()
-	m := Model{cfgPath: cfgPath, cfg: cfg, vault: v, version: version, sftp: map[*session.Session]*sftpView{}, focus: focusGrid, sideSel: 1}
+	m := Model{cfgPath: cfgPath, cfg: cfg, vault: v, version: version, sftp: map[*session.Session]*sftpView{}, kubeSess: map[*session.Session]*kubeSession{}, kubeVis: map[*session.Session]*kubeView{}, focus: focusGrid, sideSel: 1}
 	m.open = openFolders(cfg)
 	return m
 }
@@ -128,7 +140,7 @@ func openFolders(cfg *config.File) map[string]bool {
 	return open
 }
 
-func (m Model) Init() tea.Cmd { return tea.Batch(checkIcons, checkUpdate(m.version)) }
+func (m Model) Init() tea.Cmd { return tea.Batch(checkIcons, checkUpdate(m.version), loadKubeContexts) }
 
 // cards devolve os hosts mostrados na área principal.
 func (m *Model) cards() []config.Host {
@@ -197,6 +209,9 @@ func (m *Model) clamp() {
 	if m.dbMode {
 		n = len(m.cfg.Databases)
 	}
+	if m.kubeMode {
+		n = len(m.kubeCtxs)
+	}
 	m.cardSel = min(max(0, m.cardSel), max(0, n-1))
 	row, vis := m.cardSel/m.cols(), m.gridRows()
 	if row < m.gridOff {
@@ -240,11 +255,11 @@ func (m *Model) activateSide(toggle bool) tea.Cmd {
 	}
 	r := rows[m.sideSel]
 	m.query = ""
-	if r.kind != rowImport && r.kind != rowDBs {
-		if m.dbMode {
+	if r.kind != rowImport && r.kind != rowDBs && r.kind != rowKube {
+		if !m.hostMode() {
 			m.cardSel, m.gridOff = 0, 0
 		}
-		m.dbMode = false
+		m.dbMode, m.kubeMode = false, false
 	}
 	switch r.kind {
 	case rowImport:
@@ -255,7 +270,16 @@ func (m *Model) activateSide(toggle bool) tea.Cmd {
 		if !m.dbMode {
 			m.cardSel, m.gridOff = 0, 0
 		}
-		m.dbMode = true
+		m.dbMode, m.kubeMode = true, false
+		return nil
+	case rowKube:
+		if !m.kubeMode {
+			m.cardSel, m.gridOff = 0, 0
+		}
+		m.dbMode, m.kubeMode = false, true
+		if toggle || !m.kubeLoaded {
+			return loadKubeContexts // relê o kubeconfig (pode ter cluster novo)
+		}
 		return nil
 	case rowAll:
 		m.ctx = ""
@@ -459,8 +483,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case winHomeMsg:
 		m.onWinHome(msg)
 
-	case dbConnectedMsg, dbResultMsg, dbObjectsMsg:
+	case dbConnectedMsg, dbResultMsg, dbObjectsMsg, dbSwitchedMsg:
 		cmd = m.onDBMsg(msg)
+
+	case dbExportedMsg, dbExportTickMsg:
+		cmd = m.onDBExportMsg(msg)
+
+	case kubeContextsMsg, kubeNSMsg, kubePodsMsg, kubeTickMsg, kubeDescribeMsg:
+		cmd = m.onKubeMsg(msg)
 
 	case iconStatusMsg:
 		m.onIconStatus(msg.st)
@@ -613,6 +643,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.searching, m.query = true, ""
 		return nil
 	case "a":
+		if m.kubeMode {
+			m.say("os clusters vêm do kubeconfig: configure no kubectl e aperte r", false)
+			return nil
+		}
 		if m.dbMode {
 			m.modal = newDBForm(m, -1)
 			return nil
@@ -623,6 +657,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.openNewFolder()
 		return nil
 	case "e":
+		if m.kubeMode {
+			return nil
+		}
 		if m.dbMode {
 			if m.focus == focusGrid && m.cardSel < len(m.cfg.Databases) {
 				m.modal = newDBForm(m, m.cardSel)
@@ -640,6 +677,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	case "d", "delete":
+		if m.kubeMode {
+			return nil
+		}
 		if m.dbMode {
 			if m.focus == focusGrid && m.cardSel < len(m.cfg.Databases) {
 				m.askDeleteDB(m.cardSel)
@@ -713,6 +753,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if m.dbMode {
 		return m.dbGridKey(k)
 	}
+	if m.kubeMode {
+		return m.kubeGridKey(k)
+	}
 	cards := m.cards()
 	cols := m.cols()
 	switch k {
@@ -782,7 +825,15 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				return m.toggleSftp(s)
 			}
 		}
-		if v := m.sftpOf(s); v != nil && v.on {
+		if v := m.kubeVis[s]; v != nil && msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft &&
+			(!v.on && zone.Get("sess:visual").InBounds(msg) || v.on && zone.Get("sess:term").InBounds(msg)) {
+			return m.toggleKubeVisual(s)
+		}
+		if v := m.currentKube(); v != nil {
+			if cmd, ok := m.kubeMouse(v, msg); ok {
+				return cmd
+			}
+		} else if v := m.sftpOf(s); v != nil && v.on {
 			if cmd, ok := m.sftpMouse(v, msg); ok {
 				return cmd
 			}
@@ -795,6 +846,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			return cmd
 		}
 	}
+
 	switch msg.Button {
 	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
 		if msg.Action != tea.MouseActionPress {
@@ -852,7 +904,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	}
 
 	m.toast = ""
-	if zone.Get("act:new").InBounds(msg) && !m.dbMode {
+	if zone.Get("act:new").InBounds(msg) && m.hostMode() {
 		m.focus = focusGrid
 		m.openNewHost()
 		return nil
@@ -894,6 +946,9 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	}
 	if m.dbMode {
 		return m.dbCardClick(msg)
+	}
+	if m.kubeMode {
+		return m.kubeCardClick(msg)
 	}
 	for i, h := range m.cards() {
 		z := zone.Get(fmt.Sprintf("card:%d", i))

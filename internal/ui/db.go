@@ -11,11 +11,10 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/charmbracelet/bubbles/cursor"
-	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -87,13 +86,18 @@ type dbConn struct {
 	close   func() // fecha o túnel (e o ssh em segundo plano, se foi aberto pra isso)
 	current string // base atual
 	items   []dbconn.Item
-	listDBs bool // mostrando as bases (MySQL) em vez das tabelas
+	listDBs bool // mostrando as bases em vez das tabelas
+
+	addr, pass string // pra reconectar em outra base (o Postgres não troca de base na mesma conexão)
 }
 
 func (c *dbConn) shutdown() {
 	c.db.Close()
 	c.close()
 }
+
+// colSpan: a coluna col ocupa as células [x0, x1) da linha da grade.
+type colSpan struct{ col, x0, x1 int }
 
 // dbView é uma aba de banco.
 type dbView struct {
@@ -104,13 +108,18 @@ type dbView struct {
 	conn       *dbConn
 	connecting bool
 
-	editor  textarea.Model
-	running context.CancelFunc // comando em andamento (nil = nenhum)
-	runText string
+	editor    *sqlEditor
+	edDrag    bool               // arrastando o mouse no editor (selecionando)
+	running   context.CancelFunc // comando em andamento (nil = nenhum)
+	runText   string
+	exporting *atomic.Int64 // export em andamento: linhas gravadas até agora
 
 	res              *dbconn.Result
-	rRow, rCol, rOff int // célula destacada e primeira linha à vista
-	cOff             int // primeira coluna à vista
+	resStmt          string    // a consulta que gerou res (o export roda de novo)
+	rRow, rCol, rOff int       // célula destacada e primeira linha à vista
+	cOff             int       // primeira coluna à vista
+	colSpans         []colSpan // onde cada coluna à vista foi desenhada (pro clique)
+	lastClick        time.Time // último clique na grade (dois rápidos = abrir)
 
 	msg    string
 	msgErr bool
@@ -119,23 +128,7 @@ type dbView struct {
 }
 
 func newDBView(cfg config.Database) *dbView {
-	ed := textarea.New()
-	ed.Placeholder = "SELECT * FROM …;   (F5 roda o comando onde está o cursor)"
-	ed.ShowLineNumbers = true
-	ed.CharLimit = 0
-	ed.MaxHeight = 0
-	ed.Prompt = ""
-	st := textarea.Style{
-		Base:             lipgloss.NewStyle(),
-		CursorLine:       lipgloss.NewStyle(),
-		CursorLineNumber: lipgloss.NewStyle().Foreground(cAcc),
-		LineNumber:       lipgloss.NewStyle().Foreground(cFaint),
-		Placeholder:      lipgloss.NewStyle().Foreground(cFaint),
-		Text:             lipgloss.NewStyle().Foreground(cFg),
-		EndOfBuffer:      lipgloss.NewStyle().Foreground(cFaint),
-	}
-	ed.FocusedStyle, ed.BlurredStyle = st, st
-	ed.Cursor.SetMode(cursor.CursorStatic) // o piscar depende de mensagens que a aba não repassa
+	ed := newSQLEditor("SELECT * FROM …;   (F5 roda o comando onde está o cursor)")
 	return &dbView{cfg: cfg, editor: ed}
 }
 
@@ -233,7 +226,7 @@ func dbRows(v *dbView) []dbRow {
 		return nil
 	}
 	var rows []dbRow
-	if v.cfg.Engine == dbconn.MySQL && !v.conn.listDBs && v.conn.current != "" {
+	if !v.conn.listDBs && (v.cfg.Engine == dbconn.Postgres || v.conn.current != "") {
 		rows = append(rows, dbRow{label: "‹ bases", kind: "dbs", faint: true})
 	}
 	for i, it := range v.conn.items {
@@ -256,10 +249,36 @@ type dbConnectedMsg struct {
 
 type dbResultMsg struct {
 	v      *dbView
-	stmt   string
+	stmt   string // o último comando rodado
+	n      int    // quantos comandos rodaram (seleção com vários)
 	res    dbconn.Result
 	err    error
 	reload bool // mudou estrutura ou base: recarrega a lista
+}
+
+// dbSwitchedMsg: reconectou em outra base (Postgres).
+type dbSwitchedMsg struct {
+	v       *dbView
+	conn    *dbConn
+	db      *sql.DB // nil se não deu
+	current string
+	items   []dbconn.Item
+	err     error
+}
+
+// dbSwitchDB abre uma conexão nova na base name, pelo mesmo caminho (direto ou túnel).
+func dbSwitchDB(v *dbView, c *dbConn, name string) tea.Cmd {
+	cfg := v.cfg
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		db, err := dbconn.Open(ctx, cfg.Engine, c.addr, cfg.User, c.pass, name)
+		if err != nil {
+			return dbSwitchedMsg{v: v, conn: c, err: err}
+		}
+		cur, items, err := dbconn.Objects(ctx, db, cfg.Engine, false)
+		return dbSwitchedMsg{v: v, conn: c, db: db, current: cur, items: items, err: err}
+	}
 }
 
 type dbObjectsMsg struct {
@@ -372,8 +391,10 @@ func (m *Model) dbConnectWith(v *dbView, pass string) tea.Cmd {
 			closeT()
 			return dbConnectedMsg{v: v, err: err}
 		}
-		c := &dbConn{db: db, close: closeT}
-		c.current, c.items, err = dbconn.Objects(ctx, db, cfg.Engine, false)
+		c := &dbConn{db: db, close: closeT, addr: addr, pass: pass}
+		// sem base definida, mostra as bases pra escolher (o MySQL já faz isso sozinho)
+		c.listDBs = cfg.Engine == dbconn.Postgres && cfg.DB == ""
+		c.current, c.items, err = dbconn.Objects(ctx, db, cfg.Engine, c.listDBs)
 		return dbConnectedMsg{v: v, conn: c, err: err}
 	}
 }
@@ -388,9 +409,10 @@ func dbReload(v *dbView, c *dbConn) tea.Cmd {
 	}
 }
 
-// run roda stmt; ctrl+c cancela.
-func (v *dbView) run(stmt string) tea.Cmd {
-	if v.conn == nil {
+// run roda os comandos em ordem (normalmente um só); ctrl+c cancela. Para no
+// primeiro erro e mostra o resultado do último.
+func (v *dbView) run(stmts ...string) tea.Cmd {
+	if v.conn == nil || len(stmts) == 0 {
 		return nil
 	}
 	if v.running != nil {
@@ -398,16 +420,28 @@ func (v *dbView) run(stmt string) tea.Cmd {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	v.running, v.runText = cancel, stmt
+	v.running, v.runText = cancel, strings.Join(stmts, "; ")
 	v.say("", false)
 	db := v.conn.db
 	return func() tea.Msg {
 		defer cancel()
-		res, err := dbconn.Run(ctx, db, stmt)
-		if errors.Is(ctx.Err(), context.Canceled) && err != nil {
-			err = errors.New("cancelado")
+		msg := dbResultMsg{v: v}
+		for i, st := range stmts {
+			res, err := dbconn.Run(ctx, db, st)
+			msg.stmt, msg.res, msg.n = st, res, i+1
+			msg.reload = msg.reload || err == nil && !res.IsQuery
+			if errors.Is(ctx.Err(), context.Canceled) && err != nil {
+				err = errors.New("cancelado")
+			}
+			if err != nil {
+				if len(stmts) > 1 {
+					err = fmt.Errorf("comando %d de %d: %w", i+1, len(stmts), err)
+				}
+				msg.err = err
+				break
+			}
 		}
-		return dbResultMsg{v: v, stmt: stmt, res: res, err: err, reload: !res.IsQuery}
+		return msg
 	}
 }
 
@@ -439,6 +473,26 @@ func (m *Model) onDBMsg(msg tea.Msg) tea.Cmd {
 			v.say("conectado, mas não deu pra listar as tabelas: "+msg.err.Error(), true)
 		}
 		v.setFocus(1)
+	case dbSwitchedMsg:
+		v := msg.v
+		if v.closed || v.conn != msg.conn {
+			if msg.db != nil {
+				go msg.db.Close()
+			}
+			return nil
+		}
+		if msg.db == nil {
+			v.say("não deu pra abrir a base: "+msg.err.Error(), true)
+			return nil
+		}
+		old := v.conn.db
+		v.conn.db, v.conn.current, v.conn.items, v.conn.listDBs = msg.db, msg.current, msg.items, false
+		go old.Close()
+		v.sel, v.off = 0, 0
+		v.say("base "+msg.current, false)
+		if msg.err != nil {
+			v.say("base "+msg.current+", mas não deu pra listar as tabelas: "+msg.err.Error(), true)
+		}
 	case dbObjectsMsg:
 		v := msg.v
 		if v.closed || v.conn != msg.conn {
@@ -458,10 +512,16 @@ func (m *Model) onDBMsg(msg tea.Msg) tea.Cmd {
 		}
 		if msg.err != nil {
 			v.say(msg.err.Error(), true)
+			if msg.reload && v.conn != nil { // os comandos antes do erro podem ter mudado a estrutura
+				return dbReload(v, v.conn)
+			}
 			return nil
 		}
 		r := msg.res
-		v.res = &r
+		v.res, v.resStmt = &r, ""
+		if r.IsQuery {
+			v.resStmt = msg.stmt
+		}
 		v.rRow, v.rCol, v.rOff, v.cOff = 0, 0, 0, 0
 		took := r.Took.Round(time.Millisecond)
 		switch {
@@ -469,11 +529,14 @@ func (m *Model) onDBMsg(msg tea.Msg) tea.Cmd {
 			v.say(fmt.Sprintf("mostrando as %d primeiras linhas · %v", len(r.Rows), took), false)
 		case r.IsQuery:
 			v.say(fmt.Sprintf("%s · %v", plural(len(r.Rows), "linha", "linhas"), took), false)
+		case useTarget(msg.stmt) != "":
+			// trocar de base (MySQL/MariaDB): "base loja" diz mais que "0 linhas afetadas"
+			v.say("base "+useTarget(msg.stmt), false)
 		default:
 			v.say(fmt.Sprintf("✓ %s · %v", plural(int(r.Affected), "linha afetada", "linhas afetadas"), took), false)
 		}
-		if r.IsQuery && len(r.Rows) > 0 {
-			v.setFocus(2)
+		if msg.n > 1 {
+			v.say(fmt.Sprintf("✓ %d comandos · último: %s", msg.n, v.msg), false)
 		}
 		if msg.reload && v.conn != nil {
 			v.conn.listDBs = false
@@ -501,6 +564,8 @@ func (m *Model) dbKey(v *dbView, k tea.KeyMsg) tea.Cmd {
 	case "ctrl+c":
 		if v.running != nil {
 			v.running()
+		} else if t, _, ok := v.editor.Selection(); ok && v.focus == 1 {
+			return copyCmd(t)
 		}
 		return nil
 	case "f5", "ctrl+e":
@@ -515,6 +580,10 @@ func (m *Model) dbKey(v *dbView, k tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	case "esc":
+		if v.focus == 1 && v.editor.HasSelection() {
+			v.editor.ClearSelection()
+			return nil
+		}
 		if v.focus != 0 {
 			v.setFocus(0)
 			return nil
@@ -533,15 +602,36 @@ func (m *Model) dbKey(v *dbView, k tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	}
+	// digitou texto na lista ou no resultado: vai pro editor, sem perder a tecla
+	if v.focus != 1 && (k.Type == tea.KeyRunes || k.Type == tea.KeySpace) && !k.Alt && !dbShortcut(v.focus, key) {
+		v.setFocus(1)
+		// cursor no fim de um texto que não termina em linha nova (ex: o SELECT de
+		// uma tabela aberta): o comando novo começa na linha de baixo
+		if val := v.editor.Value(); strings.TrimSpace(val) != "" && !strings.HasSuffix(val, "\n") &&
+			v.editor.Offset() == len([]rune(val)) {
+			v.editor.InsertString("\n")
+		}
+	}
 	switch v.focus {
 	case 1:
-		var cmd tea.Cmd
-		v.editor, cmd = v.editor.Update(k)
-		return cmd
+		_, edH := m.dbLayout()
+		v.editor.Update(k, max(1, edH-2))
+		return nil
 	case 2:
 		return m.dbResultKey(v, key)
 	}
 	return m.dbListKey(v, key)
+}
+
+// dbShortcut são as letras que já fazem algo na lista (0) e no resultado (2).
+func dbShortcut(focus int, key string) bool {
+	switch focus {
+	case 0:
+		return key == "j" || key == "k"
+	case 2:
+		return strings.Contains("hjklgGye", key) && len(key) == 1
+	}
+	return false
 }
 
 func (m *Model) askCloseDB(v *dbView) {
@@ -598,6 +688,14 @@ func (m *Model) dbOpenRow(v *dbView) tea.Cmd {
 	}
 	it := v.conn.items[r.index]
 	if it.IsDB {
+		if v.cfg.Engine == dbconn.Postgres {
+			if v.running != nil {
+				v.say("espere o comando terminar (ctrl+c cancela)", true)
+				return nil
+			}
+			v.say("abrindo a base "+it.Name+"…", false)
+			return dbSwitchDB(v, v.conn, it.Name)
+		}
 		return v.run(it.Query) // USE: a lista recarrega com as tabelas
 	}
 	// abre a tabela: o SELECT vai pro fim do editor, sem apagar o que estava lá
@@ -610,29 +708,29 @@ func (m *Model) dbOpenRow(v *dbView) tea.Cmd {
 	return v.run(it.Query)
 }
 
-// dbRunAtCursor roda o comando (separado por ;) onde está o cursor do editor.
+// dbRunAtCursor roda o trecho selecionado no editor (todos os comandos dele) ou,
+// sem seleção, o comando (separado por ;) onde está o cursor.
 func (m *Model) dbRunAtCursor(v *dbView) tea.Cmd {
 	if v.conn == nil {
 		return nil
 	}
-	st, ok := dbconn.At(v.editor.Value(), editorOffset(v.editor))
+	if t, _, ok := v.editor.Selection(); ok {
+		var stmts []string
+		for _, st := range dbconn.Split(t) {
+			stmts = append(stmts, st.Text)
+		}
+		if len(stmts) == 0 {
+			v.say("a seleção não tem nenhum comando", true)
+			return nil
+		}
+		return v.run(stmts...)
+	}
+	st, ok := dbconn.At(v.editor.Value(), v.editor.Offset())
 	if !ok {
 		v.say("o editor está vazio", true)
 		return nil
 	}
 	return v.run(st.Text)
-}
-
-// editorOffset é a posição do cursor no texto do editor, em runas.
-func editorOffset(ed textarea.Model) int {
-	lines := strings.Split(ed.Value(), "\n")
-	row := min(ed.Line(), len(lines)-1)
-	off := 0
-	for _, l := range lines[:row] {
-		off += len([]rune(l)) + 1
-	}
-	li := ed.LineInfo()
-	return off + min(li.StartColumn+li.CharOffset, len([]rune(lines[row])))
 }
 
 func (m *Model) dbResultKey(v *dbView, key string) (cmd tea.Cmd) {
@@ -666,6 +764,10 @@ func (m *Model) dbResultKey(v *dbView, key string) (cmd tea.Cmd) {
 		if len(r.Rows) > 0 {
 			cmd = copyCmd(r.Rows[v.rRow][v.rCol].Text)
 		}
+	case "e":
+		if v.resStmt != "" {
+			m.modal = newDBExportModal(v)
+		}
 	case "enter":
 		if len(r.Rows) > 0 {
 			c := r.Rows[v.rRow][v.rCol]
@@ -691,8 +793,37 @@ func (m *Model) dbResultKey(v *dbView, key string) (cmd tea.Cmd) {
 func (m *Model) dbMouse(v *dbView, msg tea.MouseMsg) (tea.Cmd, bool) {
 	cols, rows := m.termSize()
 	x, y := msg.X-(m.sideW()+1), msg.Y-sessionOriginY
+	// arrastar a borda entre a lista e o editor muda a largura da lista
+	// (x conta a partir do começo da lista, então a borda fica em x == listW)
+	listW, _ := m.dbLayout()
+	switch {
+	case m.dbResizing && msg.Action == tea.MouseActionMotion:
+		m.cfg.DBListWidth = dbClampListW(x, cols)
+		return nil, true
+	case m.dbResizing && msg.Action == tea.MouseActionRelease:
+		m.dbResizing = false
+		m.persist()
+		return nil, true
+	case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft &&
+		x == listW && y >= 0 && y < rows-2:
+		m.dbResizing = true
+		m.cfg.DBListWidth = listW
+		return nil, true
+	}
 	if x < -1 || x >= cols || y < 0 || y >= rows {
 		return nil, false
+	}
+	if v.edDrag && msg.Action != tea.MouseActionPress {
+		// arrastando no editor: estende a seleção até onde o mouse está
+		if msg.Action == tea.MouseActionMotion {
+			if ex, ey := zone.Get("db:editor").Pos(msg); ex >= 0 && ey >= 0 {
+				v.editor.Click(ex, ey, true)
+			}
+		}
+		if msg.Action == tea.MouseActionRelease {
+			v.edDrag = false
+		}
+		return nil, true
 	}
 	if msg.Action != tea.MouseActionPress {
 		return nil, true
@@ -702,6 +833,9 @@ func (m *Model) dbMouse(v *dbView, msg tea.MouseMsg) (tea.Cmd, bool) {
 		switch {
 		case zone.Get("db:list").InBounds(msg):
 			v.off = max(0, min(len(dbRows(v))-m.dbListH(), v.off+d))
+		case zone.Get("db:editor").InBounds(msg):
+			_, edH := m.dbLayout()
+			v.editor.Scroll(d, edH-1)
 		case zone.Get("db:grid").InBounds(msg) && v.res != nil:
 			v.rOff = max(0, min(len(v.res.Rows)-m.dbGridH(), v.rOff+d))
 			v.rRow = max(v.rOff, min(v.rRow, v.rOff+m.dbGridH()-1))
@@ -724,8 +858,22 @@ func (m *Model) dbMouse(v *dbView, msg tea.MouseMsg) (tea.Cmd, bool) {
 	}
 	if v.res != nil {
 		for i := v.rOff; i < min(len(v.res.Rows), v.rOff+m.dbGridH()); i++ {
-			if zone.Get(fmt.Sprintf("db:r:%d", i)).InBounds(msg) {
-				v.rRow = i
+			if z := zone.Get(fmt.Sprintf("db:r:%d", i)); z.InBounds(msg) {
+				col := v.rCol
+				px, _ := z.Pos(msg)
+				for _, sp := range v.colSpans {
+					if px >= sp.x0 && px < sp.x1 {
+						col = sp.col
+					}
+				}
+				// segundo clique na mesma célula, ou dois rápidos na linha (a grade
+				// pode ter rolado pra mostrar a célula inteira), mostra o valor inteiro
+				quick := time.Since(v.lastClick) < 500*time.Millisecond
+				if v.focus == 2 && v.rRow == i && (v.rCol == col || quick) {
+					v.lastClick = time.Time{}
+					return m.dbResultKey(v, "enter"), true
+				}
+				v.rRow, v.rCol, v.lastClick = i, col, time.Now()
 				v.setFocus(2)
 				return nil, true
 			}
@@ -733,6 +881,9 @@ func (m *Model) dbMouse(v *dbView, msg tea.MouseMsg) (tea.Cmd, bool) {
 	}
 	if zone.Get("db:editor").InBounds(msg) {
 		v.setFocus(1)
+		ex, ey := zone.Get("db:editor").Pos(msg)
+		v.editor.Click(ex, ey, msg.Shift)
+		v.edDrag = true
 	}
 	return nil, true
 }
@@ -1023,16 +1174,36 @@ type valueModal struct {
 	title, text string
 	null        bool
 	off         int
+	wide        bool // texto longo (describe): usa quase a tela toda
 }
 
-func (vm *valueModal) lines() []string {
-	return strings.Split(lipgloss.NewStyle().Width(70).Render(strings.ReplaceAll(vm.text, "\t", "    ")), "\n")
+// size é a largura do texto e quantas linhas aparecem de cada vez.
+func (vm *valueModal) size(m *Model) (w, h int) {
+	if !vm.wide {
+		return 70, 20
+	}
+	return max(70, min(m.mainW()-10, 130)), max(10, m.bodyH()-12)
+}
+
+func (vm *valueModal) lines(w int) []string {
+	return strings.Split(lipgloss.NewStyle().Width(w).Render(strings.ReplaceAll(vm.text, "\t", "    ")), "\n")
 }
 
 func (vm *valueModal) update(m *Model, msg tea.Msg) (tea.Cmd, bool) {
 	if mm, ok := isLeftClick(msg); ok {
 		if clicked("m:close", mm) || clicked("m:ok", mm) {
 			return nil, true
+		}
+		return nil, false
+	}
+	w, h := vm.size(m)
+	last := max(0, len(vm.lines(w))-h)
+	if mm, ok := msg.(tea.MouseMsg); ok && mm.Action == tea.MouseActionPress {
+		switch mm.Button {
+		case tea.MouseButtonWheelUp:
+			vm.off = max(0, vm.off-3)
+		case tea.MouseButtonWheelDown:
+			vm.off = min(last, vm.off+3)
 		}
 		return nil, false
 	}
@@ -1046,26 +1217,35 @@ func (vm *valueModal) update(m *Model, msg tea.Msg) (tea.Cmd, bool) {
 	case "y":
 		return copyCmd(vm.text), true
 	case "down", "j":
-		vm.off = min(vm.off+1, max(0, len(vm.lines())-20))
+		vm.off = min(vm.off+1, last)
 	case "up", "k":
 		vm.off = max(0, vm.off-1)
+	case "pgdown", " ":
+		vm.off = min(vm.off+h, last)
+	case "pgup":
+		vm.off = max(0, vm.off-h)
+	case "home", "g":
+		vm.off = 0
+	case "end", "G":
+		vm.off = last
 	}
 	return nil, false
 }
 
 func (vm *valueModal) view(m *Model) string {
+	w, h := vm.size(m)
 	body := sFaint.Italic(true).Render("NULL")
 	if !vm.null {
-		ls := vm.lines()
-		end := min(len(ls), vm.off+20)
+		ls := vm.lines(w)
+		end := min(len(ls), vm.off+h)
 		body = sFg.Render(strings.Join(ls[vm.off:end], "\n"))
-		if len(ls) > 20 {
-			body += "\n" + sFaint.Render(fmt.Sprintf("linhas %d–%d de %d · ↑↓ rola", vm.off+1, end, len(ls)))
+		if len(ls) > h {
+			body += "\n" + sFaint.Render(fmt.Sprintf("linhas %d–%d de %d · ↑↓ pgup/pgdn rolam", vm.off+1, end, len(ls)))
 		}
 	}
 	hint := sFaint.Render("y copia · esc fecha")
 	btn := button("m:ok", " Fechar ", true, true)
-	return dialog(vm.title, 78, body+"\n\n"+hint+"\n"+lipgloss.PlaceHorizontal(72, lipgloss.Right, btn)+"\n")
+	return dialog(vm.title, w+8, body+"\n\n"+hint+"\n"+lipgloss.PlaceHorizontal(w+2, lipgloss.Right, btn)+"\n")
 }
 
 // ---- cards dos bancos (área principal) ----
@@ -1181,8 +1361,15 @@ func (m *Model) dbGridKey(k string) tea.Cmd {
 
 func (m *Model) dbLayout() (listW, edH int) {
 	cols, rows := m.termSize()
-	return max(18, min(32, cols/4)), max(3, min(12, (rows-2)/3))
+	listW = max(18, min(32, cols/4))
+	if w := m.cfg.DBListWidth; w > 0 { // escolhida arrastando a borda
+		listW = dbClampListW(w, cols)
+	}
+	return listW, max(3, min(12, (rows-2)/3))
 }
+
+// dbClampListW: a lista tem um mínimo, e o editor/resultado ficam com pelo menos 40 colunas.
+func dbClampListW(w, cols int) int { return max(12, min(w, cols-1-40)) }
 
 // dbListH é quantas linhas a lista mostra (tudo menos o título).
 func (m *Model) dbListH() int {
@@ -1215,7 +1402,10 @@ func (m Model) dbHeader(v *dbView, cols int) string {
 	} else {
 		parts = append(parts, bg.Foreground(cDim).Render("direto"))
 	}
-	if v.conn != nil && v.conn.current != "" {
+	if v.conn != nil && (v.conn.listDBs || (v.cfg.Engine == dbconn.MySQL && v.conn.current == "")) {
+		// ainda escolhendo (no Postgres a conexão já está numa base, mas não é a escolhida)
+		parts = append(parts, bg.Foreground(cAcc).Render("escolha uma base"))
+	} else if v.conn != nil && v.conn.current != "" {
 		parts = append(parts, bg.Foreground(cFg).Render("base "+v.conn.current))
 	}
 	if v.conn == nil && !v.connecting {
@@ -1235,8 +1425,6 @@ func (m Model) viewDB(v *dbView, cols, rows int) []string {
 	top := rows - 2
 	left := m.viewDBList(v, listW, top)
 
-	v.editor.SetWidth(rightW)
-	v.editor.SetHeight(edH)
 	var right []string
 	switch {
 	case v.connecting:
@@ -1244,13 +1432,27 @@ func (m Model) viewDB(v *dbView, cols, rows int) []string {
 	case v.conn == nil:
 		right = []string{"", sDim.Render("  sem conexão · r ou enter tenta de novo · x fecha a aba")}
 	default:
-		right = append(right, strings.Split(zone.Mark("db:editor", v.editor.View()), "\n")...)
+		edTitle := lipgloss.NewStyle().Foreground(cDim).Bold(true)
+		if v.focus == 1 {
+			edTitle = lipgloss.NewStyle().Background(cAcc).Foreground(cDark).Bold(true)
+		}
+		hint := "  F5 roda o comando onde está o cursor · shift+setas selecionam"
+		if v.editor.HasSelection() {
+			hint = "  F5 roda a seleção · ctrl+c copia · esc desfaz"
+		}
+		right = append(right, edTitle.Render(" Editor SQL ")+sFaint.Render(hint))
+		// a primeira linha é o título
+		ed := v.editor.View(rightW, max(1, edH-1))
+		right = append(right, strings.Split(zone.Mark("db:editor", strings.Join(ed, "\n")), "\n")...)
 		for len(right) < edH {
 			right = append(right, "")
 		}
 		right = append(right, m.viewDBResults(v, rightW, top-edH)...)
 	}
 	sep := sFaint.Render("│")
+	if m.dbResizing {
+		sep = sAcc.Render("│")
+	}
 	out := make([]string, 0, rows)
 	for i := 0; i < top; i++ {
 		l, r := "", ""
@@ -1266,13 +1468,16 @@ func (m Model) viewDB(v *dbView, cols, rows int) []string {
 	if v.msgErr {
 		status = sErr.Render(" " + v.msg)
 	}
-	if v.running != nil {
+	if v.exporting != nil {
+		status = sAcc.Render(fmt.Sprintf(" exportando… %s ", plural(int(v.exporting.Load()), "linha", "linhas"))) +
+			sFaint.Render("ctrl+c cancela · "+v.runText)
+	} else if v.running != nil {
 		status = sAcc.Render(" rodando… ") + sFaint.Render("ctrl+c cancela · "+oneLine(v.runText))
 	} else if v.connecting {
 		status = sAcc.Render(" conectando em " + v.cfg.Name + "…")
 	}
 	out = append(out, lipgloss.NewStyle().MaxWidth(cols).Render(status))
-	help := " F5 roda o comando do cursor · tab troca · enter abre a tabela ou vê o valor · y copia · esc volta"
+	help := " F5 roda o comando do cursor (ou a seleção) · tab troca · enter (ou 2 cliques) abre a tabela ou vê o valor inteiro · y copia · e exporta · esc volta"
 	out = append(out, sFaint.MaxWidth(cols).Render(help))
 	return out
 }
@@ -1281,7 +1486,7 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 func (m Model) viewDBList(v *dbView, w, h int) []string {
 	title := " Tabelas"
-	if v.conn != nil && v.cfg.Engine == dbconn.MySQL && (v.conn.listDBs || v.conn.current == "") {
+	if v.conn != nil && (v.conn.listDBs || (v.cfg.Engine == dbconn.MySQL && v.conn.current == "")) {
 		title = " Bases"
 	}
 	st := lipgloss.NewStyle().Foreground(cDim).Bold(true)
@@ -1341,37 +1546,55 @@ func (m Model) viewDBResults(v *dbView, w, h int) []string {
 		}
 		widths[c] = min(widths[c], 40)
 	}
-	// garante a coluna destacada à vista, andando cOff pra direita se preciso
+	// espaço das setas: ‹ à esquerda (rolou) e › à direita (tem mais)
+	const lead, tail = 1, 2
+	room := w - lead - tail
+	// garante a coluna destacada inteira à vista, andando cOff pra direita se preciso
 	fits := func(from, to int) bool {
 		used := 0
 		for c := from; c <= to; c++ {
 			used += widths[c] + 3
 		}
-		return used <= w
+		return used <= room
 	}
 	for v.cOff < v.rCol && !fits(v.cOff, v.rCol) {
 		v.cOff++
 	}
 	var visible []int
 	used := 0
-	for c := v.cOff; c < len(r.Columns) && used+widths[c]+3 <= w; c++ {
+	for c := v.cOff; c < len(r.Columns) && used+widths[c]+3 <= room; c++ {
 		visible = append(visible, c)
 		used += widths[c] + 3
 	}
 	if len(visible) == 0 && v.cOff < len(r.Columns) {
 		visible = []int{v.cOff}
-		widths[v.cOff] = max(1, w-3)
+		widths[v.cOff] = max(1, room-3)
+		used = room
+	}
+	// a próxima coluna não cabe inteira: aparece cortada no que sobrou, em vez
+	// de deixar o espaço vazio (fica inteira quando a seleção chega nela)
+	if next := v.cOff + len(visible); next < len(r.Columns) && room-used >= 3+4 {
+		widths[next] = room - used - 3
+		visible = append(visible, next)
 	}
 	cell := func(text string, wd int) string {
 		text = runewidth.Truncate(cellText(text), wd, "…")
 		return " " + text + strings.Repeat(" ", max(0, wd-lipgloss.Width(text))) + " "
 	}
-	hdr := ""
+	// a coluna da esquerda é sempre reservada: com ou sem ‹, cabeçalho e linhas alinham
+	left := " "
+	if v.cOff > 0 {
+		left = "‹"
+	}
+	hdr := sAcc.Render(left)
+	v.colSpans = v.colSpans[:0]
+	x := lipgloss.Width(left)
+	for _, c := range visible {
+		v.colSpans = append(v.colSpans, colSpan{c, x, x + widths[c] + 3})
+		x += widths[c] + 3
+	}
 	for _, c := range visible {
 		hdr += sBold.Render(cell(r.Columns[c], widths[c])) + sFaint.Render("│")
-	}
-	if v.cOff > 0 {
-		hdr = sFaint.Render("‹") + hdr
 	}
 	if len(visible) > 0 && visible[len(visible)-1] < len(r.Columns)-1 {
 		hdr += sAcc.Render(" ›") // tem mais colunas à direita (→ anda)
@@ -1383,7 +1606,7 @@ func (m Model) viewDBResults(v *dbView, w, h int) []string {
 	n := h - 2
 	var body []string
 	for i := v.rOff; i < min(len(r.Rows), v.rOff+n); i++ {
-		line := ""
+		line := " "
 		for _, c := range visible {
 			val := r.Rows[i][c]
 			st := sFg
@@ -1539,4 +1762,13 @@ func (p *dbPassModal) view(m *Model) string {
 	btns := button("m:cancel", " Cancelar ", false, false) + "  " + button("m:ok", " Conectar ", true, true)
 	rows = append(rows, "", lipgloss.PlaceHorizontal(50, lipgloss.Right, btns), "")
 	return dialog("Senha de "+d.Name, 56, strings.Join(rows, "\n"))
+}
+
+// useTarget devolve a base de um comando "USE base" ("" se não for USE).
+func useTarget(stmt string) string {
+	f := strings.Fields(strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(stmt), ";")))
+	if len(f) != 2 || !strings.EqualFold(f[0], "use") {
+		return ""
+	}
+	return strings.Trim(f[1], "`\"")
 }

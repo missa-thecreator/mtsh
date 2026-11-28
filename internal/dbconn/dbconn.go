@@ -181,11 +181,28 @@ type Item struct {
 	IsDB  bool
 }
 
-// Objects lista as tabelas e views. No MySQL sem base escolhida (ou com
-// listDBs), lista as bases. O Postgres não troca de base na mesma conexão.
+// Objects lista as tabelas e views. Sem base escolhida (MySQL) ou com listDBs,
+// lista as bases. No Postgres, trocar de base exige outra conexão: quem chama
+// reconecta na base escolhida (Item.IsDB com Query vazia).
 func Objects(ctx context.Context, db *sql.DB, engine string, listDBs bool) (current string, items []Item, err error) {
 	if engine == Postgres {
 		db.QueryRowContext(ctx, "SELECT current_database()").Scan(&current)
+		if listDBs {
+			rows, err := db.QueryContext(ctx, `SELECT datname FROM pg_database
+				WHERE NOT datistemplate AND datallowconn ORDER BY datname`)
+			if err != nil {
+				return current, nil, err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var name string
+				if err := rows.Scan(&name); err != nil {
+					return current, nil, err
+				}
+				items = append(items, Item{Name: name, IsDB: true})
+			}
+			return current, items, rows.Err()
+		}
 		rows, err := db.QueryContext(ctx, `SELECT table_schema, table_name FROM information_schema.tables
 			WHERE table_schema NOT IN ('pg_catalog','information_schema') ORDER BY table_schema <> 'public', 1, 2`)
 		if err != nil {

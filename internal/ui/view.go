@@ -112,10 +112,16 @@ func (m Model) treeLine(r treeRow, i, w int, focused bool) string {
 		isCtx = false
 	case rowAll:
 		text, count = "≡ Todos", fmt.Sprint(len(m.cfg.Hosts))
-		isCtx = isCtx && m.ctx == "" && !m.dbMode
+		isCtx = isCtx && m.ctx == "" && m.hostMode()
 	case rowDBs:
 		text, count = dbGlyph+" Bancos", fmt.Sprint(len(m.cfg.Databases))
 		isCtx = isCtx && m.dbMode
+	case rowKube:
+		text = kubeGlyph + " Clusters"
+		if m.kubeLoaded && m.kubeErr == "" {
+			count = fmt.Sprint(len(m.kubeCtxs))
+		}
+		isCtx = isCtx && m.kubeMode
 	case rowFolder:
 		arrow := "▸"
 		if m.open[r.path] {
@@ -126,7 +132,7 @@ func (m Model) treeLine(r treeRow, i, w int, focused bool) string {
 			name = ic + " " + name
 		}
 		text, count = indent+arrow+" "+name, fmt.Sprint(m.cfg.Count(r.path))
-		isCtx = isCtx && m.ctx == r.path && !m.dbMode
+		isCtx = isCtx && m.ctx == r.path && m.hostMode()
 	case rowHost:
 		if r.depth == 0 {
 			text = m.markChar(r.host) + " " + r.host.Name // sem pasta: alinhado com as pastas da raiz
@@ -183,6 +189,9 @@ func (m Model) treeLine(r treeRow, i, w int, focused bool) string {
 func (m Model) viewMain() string {
 	if m.dbMode {
 		return m.viewDBMain()
+	}
+	if m.kubeMode {
+		return m.viewKubeMain()
 	}
 	w := m.mainW()
 	cards := m.cards()
@@ -319,6 +328,16 @@ func (m Model) statusHints() []hint {
 			return []hint{{"r", "reconectar"}, {"x", "fechar aba"}, {"ctrl+b", "Início"}}
 		}
 		return []hint{{"ctrl+b", "Início"}, {"F5", "roda"}, {"tab", "lista/editor/resultado"}, {"esc", "volta"}}
+	case m.currentKube() != nil:
+		return []hint{{"alt+v", "terminal"}, {"enter", "ações"}, {"s", "shell"}, {"L", "logs"}, {"d", "describe"}, {"tab", "namespaces/pods"}, {"ctrl+b", "Início"}}
+	case m.current() != nil && m.kubeSess[m.current()] != nil:
+		if done, _ := m.current().Exited(); done {
+			return []hint{{"enter", "abrir de novo"}, {"x", "fechar aba"}, {"ctrl+b", "Início"}}
+		}
+		if m.kubeVis[m.current()] != nil {
+			return []hint{{"ctrl+b", "Início"}, {"alt+v", "visual"}, {"esc", "fechar aba"}, {"arrastar", "marca"}, {"botão direito", "copia/cola"}, {"rodinha", "rola"}}
+		}
+		return []hint{{"ctrl+b", "Início"}, {"esc", "fechar aba"}, {"arrastar", "marca"}, {"botão direito", "copia/cola"}, {"rodinha", "rola"}}
 	case m.current() != nil:
 		if done, _ := m.current().Exited(); done {
 			return []hint{{"enter", "reconectar"}, {"x", "fechar aba"}, {"ctrl+b", "Início"}}
@@ -337,6 +356,8 @@ func (m Model) statusHints() []hint {
 			hs = append([]hint{{"→", "sessões"}}, hs...)
 		}
 		return hs
+	case m.kubeMode:
+		return []hint{{"enter", "abrir"}, {"r", "reler kubeconfig"}, {"tab", "menu"}, {"q/esc", "sair"}}
 	case m.dbMode:
 		return []hint{{"enter", "conectar"}, {"a", "novo banco"}, {"e", "editar"}, {"d", "apagar"}, {"tab", "menu"}, {"q/esc", "sair"}}
 	case m.focus == focusSide:

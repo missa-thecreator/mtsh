@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"mtsh/internal/config"
 	"mtsh/internal/dbconn"
@@ -183,14 +185,123 @@ func TestEditorOffset(t *testing.T) {
 	v := newDBView(config.Database{})
 	v.editor.Focus()
 	v.editor.SetValue("SELECT 1;\nSELECT 2;")
-	v.editor.CursorUp() // fica na 1ª linha
-	st, _ := dbconn.At(v.editor.Value(), editorOffset(v.editor))
+	v.editor.Update(tea.KeyMsg{Type: tea.KeyUp}, 5) // fica na 1ª linha
+	st, _ := dbconn.At(v.editor.Value(), v.editor.Offset())
 	if st.Text != "SELECT 1" {
 		t.Fatalf("1ª linha escolheu %q", st.Text)
 	}
-	v.editor.CursorDown()
-	if st, _ = dbconn.At(v.editor.Value(), editorOffset(v.editor)); st.Text != "SELECT 2" {
+	v.editor.Update(tea.KeyMsg{Type: tea.KeyDown}, 5)
+	if st, _ = dbconn.At(v.editor.Value(), v.editor.Offset()); st.Text != "SELECT 2" {
 		t.Fatalf("2ª linha escolheu %q", st.Text)
+	}
+}
+
+func edKeys(e *sqlEditor, keys ...tea.KeyType) {
+	for _, k := range keys {
+		e.Update(tea.KeyMsg{Type: k}, 5)
+	}
+}
+
+func TestEditorSelecao(t *testing.T) {
+	e := newSQLEditor("")
+	e.SetValue("SELECT 1;\nSELECT 2;\nSELECT 3;")
+	edKeys(e, tea.KeyCtrlHome, tea.KeyShiftDown, tea.KeyShiftDown) // 1ª e 2ª linha inteiras
+	got, start, ok := e.Selection()
+	if !ok || got != "SELECT 1;\nSELECT 2;\n" || start != 0 {
+		t.Fatalf("seleção = %q (%d, %v)", got, start, ok)
+	}
+	// de trás pra frente dá o mesmo trecho
+	edKeys(e, tea.KeyEsc, tea.KeyCtrlEnd)
+	e.ClearSelection()
+	edKeys(e, tea.KeyShiftUp, tea.KeyShiftHome)
+	if got, _, _ = e.Selection(); got != "SELECT 2;\nSELECT 3;" {
+		t.Fatalf("seleção pra cima = %q", got)
+	}
+	// seta sem shift desfaz e leva o cursor pra ponta
+	edKeys(e, tea.KeyLeft)
+	if e.HasSelection() || e.row != 1 || e.col != 0 {
+		t.Fatalf("depois da seta: sel=%v cursor=%d,%d", e.HasSelection(), e.row, e.col)
+	}
+	// digitar troca o selecionado
+	edKeys(e, tea.KeyShiftEnd)
+	e.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("SELECT 9;")}, 5)
+	if v := e.Value(); v != "SELECT 1;\nSELECT 9;\nSELECT 3;" {
+		t.Fatalf("depois de digitar: %q", v)
+	}
+	// ctrl+a + backspace apaga tudo
+	edKeys(e, tea.KeyCtrlA, tea.KeyBackspace)
+	if e.Value() != "" || len(e.lines) != 1 {
+		t.Fatalf("depois de apagar tudo: %q", e.Value())
+	}
+}
+
+func TestEditorEdicao(t *testing.T) {
+	e := newSQLEditor("")
+	e.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("  ab")}, 5)
+	edKeys(e, tea.KeyEnter) // mantém o recuo
+	e.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("cé")}, 5)
+	if e.Value() != "  ab\n  cé" {
+		t.Fatalf("valor: %q", e.Value())
+	}
+	edKeys(e, tea.KeyHome, tea.KeyBackspace) // junta com a linha de cima
+	if e.Value() != "  ab  cé" || e.col != 4 {
+		t.Fatalf("depois do backspace: %q col %d", e.Value(), e.col)
+	}
+	edKeys(e, tea.KeyDelete, tea.KeyDelete)
+	if e.Value() != "  abcé" {
+		t.Fatalf("depois do delete: %q", e.Value())
+	}
+	e.InsertString("x\ny\nz")
+	if e.Value() != "  abx\ny\nzcé" || e.row != 2 || e.col != 1 {
+		t.Fatalf("colar várias linhas: %q cursor %d,%d", e.Value(), e.row, e.col)
+	}
+	edKeys(e, tea.KeyCtrlU)
+	if e.Value() != "  abx\ny\ncé" {
+		t.Fatalf("ctrl+u: %q", e.Value())
+	}
+}
+
+func TestEditorView(t *testing.T) {
+	e := newSQLEditor("")
+	e.Focus()
+	e.SetValue("SELECT 1;\nSELECT 2;\nSELECT 3;\nSELECT 4;")
+	out := e.View(30, 2) // cursor na última linha: rola pra ela ficar à vista
+	if len(out) != 2 || !strings.Contains(ansi.Strip(out[1]), "4 SELECT 4;") {
+		t.Fatalf("view: %q", out)
+	}
+	// linha comprida rola pro lado em vez de quebrar
+	e.SetValue(strings.Repeat("x", 100))
+	out = e.View(30, 2)
+	if w := lipgloss.Width(out[0]); w > 30 {
+		t.Fatalf("linha passou da largura: %d", w)
+	}
+}
+
+// TestDBRodaSelecao: com trecho selecionado, o F5 roda todos os comandos dele.
+func TestDBRodaSelecao(t *testing.T) {
+	m := dbTestModel(t)
+	v := newDBView(config.Database{Name: "x"})
+	v.conn = &dbConn{}
+	v.setFocus(1)
+	v.editor.SetValue("SELECT 1;\nSELECT 2;\nSELECT 3;")
+	edKeys(v.editor, tea.KeyCtrlHome, tea.KeyDown, tea.KeyShiftDown, tea.KeyShiftEnd)
+	if cmd := m.dbRunAtCursor(v); cmd == nil {
+		t.Fatal("F5 com seleção não rodou")
+	}
+	if v.runText != "SELECT 2; SELECT 3" {
+		t.Fatalf("rodou %q", v.runText)
+	}
+	v.running = nil
+	v.editor.SetValue("SELECT 1;\n-- só comentário")
+	edKeys(v.editor, tea.KeyShiftHome)
+	if cmd := m.dbRunAtCursor(v); cmd != nil || !v.msgErr {
+		t.Fatalf("seleção sem comando devia avisar: %q", v.msg)
+	}
+	// esc com seleção só desfaz a seleção
+	edKeys(v.editor, tea.KeyShiftHome)
+	m.dbKey(v, tea.KeyMsg{Type: tea.KeyEsc})
+	if v.focus != 1 || v.editor.HasSelection() {
+		t.Fatal("esc com seleção devia só desfazer a seleção")
 	}
 }
 
@@ -273,5 +384,21 @@ func TestE2ESenhaAoConectar(t *testing.T) {
 	m.onDBMsg(cmd())
 	if m.currentDB().conn == nil {
 		t.Fatal(m.currentDB().msg)
+	}
+}
+
+func TestUseTarget(t *testing.T) {
+	cases := map[string]string{
+		"USE `loja`":      "loja",
+		"use financeiro;": "financeiro",
+		"  USE loja ;  ":  "loja",
+		"SELECT 1":        "",
+		"use":             "",
+		"user_list":       "",
+	}
+	for in, want := range cases {
+		if got := useTarget(in); got != want {
+			t.Errorf("useTarget(%q) = %q, quero %q", in, got, want)
+		}
 	}
 }

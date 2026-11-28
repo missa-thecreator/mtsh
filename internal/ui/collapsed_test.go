@@ -18,8 +18,8 @@ func TestCollapsedFoldersSurviveRestart(t *testing.T) {
 		t.Fatalf("estado inicial errado: %v", m.open)
 	}
 
-	// fecha A pela árvore: linhas são Importar, Todos, Bancos, A, A/B, C
-	m.focus, m.sideSel = focusSide, 3
+	// fecha A pela árvore: linhas são Importar, Todos, Bancos, Clusters, A, A/B, C
+	m.focus, m.sideSel = focusSide, 4
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
 

@@ -117,6 +117,7 @@ type File struct {
 	FolderStyles map[string]FolderStyle `yaml:"folder_styles,omitempty"` // chave = caminho da pasta
 	Collapsed    []string               `yaml:"collapsed,omitempty"`     // pastas fechadas na barra lateral
 	SideWidth    int                    `yaml:"side_width,omitempty"`    // largura da barra lateral (0 = padrão)
+	DBListWidth  int                    `yaml:"db_list_width,omitempty"` // largura da lista de tabelas nas abas de banco (0 = automática)
 	Hosts        []Host                 `yaml:"hosts"`
 	Databases    []Database             `yaml:"databases,omitempty"`
 

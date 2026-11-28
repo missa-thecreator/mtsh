@@ -9,7 +9,8 @@ const (
 	rowAll
 	rowFolder
 	rowHost
-	rowDBs // "Bancos": a área principal mostra os bancos cadastrados
+	rowDBs  // "Bancos": a área principal mostra os bancos cadastrados
+	rowKube // "Clusters": a área principal mostra os clusters do kubeconfig
 )
 
 // treeRow é uma linha da árvore da barra lateral.
@@ -20,10 +21,10 @@ type treeRow struct {
 	depth int
 }
 
-// treeRows monta a árvore: "Importar", "Todos", "Bancos", depois pastas (com subpastas e hosts
+// treeRows monta a árvore: "Importar", "Todos", "Bancos", "Clusters", depois pastas (com subpastas e hosts
 // quando abertas) e por fim os hosts sem pasta.
 func (m *Model) treeRows() []treeRow {
-	rows := []treeRow{{kind: rowImport}, {kind: rowAll}, {kind: rowDBs}}
+	rows := []treeRow{{kind: rowImport}, {kind: rowAll}, {kind: rowDBs}, {kind: rowKube}}
 	var walk func(path string, depth int)
 	walk = func(path string, depth int) {
 		for _, f := range m.cfg.Children(path) {

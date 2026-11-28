@@ -87,6 +87,9 @@ func (m *Model) hasSession(name string) bool {
 
 // sessionHeader é a barra de título da sessão: onde você está, sempre à vista.
 func (m Model) sessionHeader(s *session.Session, cols int) string {
+	if k := m.kubeSess[s]; k != nil {
+		return m.kubeSessionHeader(s, k, cols)
+	}
 	bg := lipgloss.NewStyle().Background(cSel)
 	// Ssh | Sftp na ponta direita: clicável, ou alt+s
 	sftpOn := false
@@ -181,6 +184,9 @@ func (m *Model) connect(h config.Host) tea.Cmd {
 // reconnect troca uma sessão encerrada por uma nova, na mesma aba.
 func (m *Model) reconnect(i int) tea.Cmd {
 	old := m.sessions[i-1]
+	if k := m.kubeSess[old]; k != nil {
+		return m.reconnectKube(i, k)
+	}
 	h, ok := m.hostByName(old.Name)
 	if !ok {
 		m.say(old.Name+" não existe mais na lista", true)
@@ -228,6 +234,8 @@ func (m *Model) closeTab(i int) {
 		return
 	}
 	m.sessions[i-1].Close()
+	k := m.kubeSess[m.sessions[i-1]]
+	m.forgetKube(m.sessions[i-1])
 	if v := m.sftp[m.sessions[i-1]]; v != nil {
 		v.close()
 		delete(m.sftp, m.sessions[i-1])
@@ -236,6 +244,13 @@ func (m *Model) closeTab(i int) {
 	switch {
 	case m.tab == i:
 		m.tab = 0 // fechou a aba que estava aberta: volta pro Início
+		if k != nil && !k.term {
+			// shell/logs de pod: volta pra aba do cluster (na visualização), se ainda estiver aberta
+			if c := m.clusterSession(k.kctx); c != nil {
+				m.tab = m.indexOf(c)
+				m.kubeVis[c].on = true
+			}
+		}
 	case m.tab > i:
 		m.tab--
 	}
@@ -267,6 +282,10 @@ func (m *Model) onSessionExit(s *session.Session) {
 	if i == 0 {
 		return // aba já foi fechada
 	}
+	if k := m.kubeSess[s]; k != nil {
+		m.onKubeSessionExit(i, s, k)
+		return
+	}
 	if code := s.ExitCode(); code == 0 {
 		m.closeTab(i)
 		m.say("sessão em "+s.Name+" encerrada", false)
@@ -290,6 +309,7 @@ func (m *Model) askQuit() tea.Cmd {
 		onOK: func(m *Model) tea.Cmd {
 			for _, s := range m.sessions {
 				s.Close()
+				m.forgetKube(s) // apaga o kubeconfig provisório das abas de cluster
 			}
 			return tea.Quit
 		},
@@ -315,6 +335,14 @@ func (m *Model) sessionKey(k tea.KeyMsg) tea.Cmd {
 	if k.String() == "ctrl+b" {
 		m.tab = 0
 		return nil
+	}
+	if m.kubeVis[s] != nil {
+		if k.String() == "alt+v" {
+			return m.toggleKubeVisual(s)
+		}
+		if v := m.currentKube(); v != nil {
+			return m.kubeKey(v, k)
+		}
 	}
 	if k.String() == "alt+s" {
 		return m.toggleSftp(s)
@@ -420,6 +448,9 @@ func (m Model) viewSession() string {
 	s := m.current()
 	cols, rows := m.termSize()
 	done, _ := s.Exited()
+	if v := m.currentKube(); v != nil {
+		return m.viewKubeTab(s, v)
+	}
 	if v := m.sftpOf(s); v != nil && v.on {
 		body := m.viewSftp(v, cols, rows)
 		return lipgloss.NewStyle().PaddingLeft(1).Render(m.sessionHeader(s, cols) + "\n" + strings.Join(body, "\n"))
@@ -491,6 +522,9 @@ func (m Model) tabMarkPlain(i int) string {
 	if done, _ := s.Exited(); done {
 		return "○"
 	}
+	if m.kubeSess[s] != nil {
+		return kubeGlyph
+	}
 	if h, ok := m.hostByName(s.Name); ok {
 		return m.markChar(h)
 	}
@@ -502,6 +536,9 @@ func (m Model) tabMark(i int) string {
 	s := m.sessions[i-1]
 	if done, _ := s.Exited(); done {
 		return sErr.Render("○")
+	}
+	if m.kubeSess[s] != nil {
+		return sAcc.Render(kubeGlyph)
 	}
 	if h, ok := m.hostByName(s.Name); ok {
 		return m.hostMark(h)
